@@ -259,13 +259,22 @@ function mathBlock(title: string, body: string): string {
   return `<section class="math-block"><h4>${title}</h4><div class="formula">${body}</div></section>`;
 }
 
-/** One row of numbers. `tip` makes the label focusable and shows the explanation on hover or focus. */
-function ledgerRow(label: string, value: string, note: string, cls = '', tip = ''): string {
+/** Dollars with thousands separators, so a four-digit saving reads at a glance. */
+function usdFmt(n: number): string {
+  return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/**
+ * One row of numbers. `tip` makes the label focusable and shows the explanation on hover or focus.
+ * `quiet` rows are context (how many requests, for how long) and print smaller than the savings.
+ * `note` is markup: a <b> inside it marks the figure to look at.
+ */
+function ledgerRow(label: string, value: string, note: string, cls = '', tip = '', quiet = false): string {
   const name = tip
     ? `<span class="q" tabindex="0" aria-label="${escapeHtml(`${label}. ${tip}`)}" data-tip="${escapeHtml(tip)}">${label}</span>`
     : label;
   return (
-    `<div class="ledger-row">` +
+    `<div class="ledger-row${quiet ? ' quiet' : ''}">` +
     `<dt>${name}</dt>` +
     `<dd class="ledger-val${cls ? ` ${cls}` : ''}">${value}</dd>` +
     `<dd class="ledger-note">${note}</dd>` +
@@ -287,11 +296,14 @@ export function renderHeaderFragment(s: StatsPayload, port: number): string {
   const cAvg = s.compressed_avg_usd_per_request ?? 0;
   const paidImaged = s.compressed_paid_requests ?? 0;
   const withoutAvg = paidImaged > 0 ? cAvg + (s.saved_usd ?? 0) / paidImaged : 0;
+  // How far the imaged cost sits from the text cost, as the one figure to read first.
+  const costDelta = withoutAvg > 0 ? Math.round((cAvg / withoutAvg - 1) * 100) : 0;
+  const costDeltaMark = costDelta === 0 ? '' : `<b>${costDelta < 0 ? '−' : '+'}${Math.abs(costDelta)}%</b> `;
   const costRow = paidImaged > 0
     ? ledgerRow(
         'Cost per request',
         `$${cAvg.toFixed(4)}`,
-        `vs $${withoutAvg.toFixed(4)} without fastpipe`,
+        `${costDeltaMark}vs $${withoutAvg.toFixed(4)} as text`,
         cAvg <= withoutAvg ? 'pos' : 'neg',
         'Average cost of paid imaged requests versus the cache-aware text counterfactual for those same requests. Unmeasured requests are assigned zero savings.',
       )
@@ -321,11 +333,11 @@ export function renderHeaderFragment(s: StatsPayload, port: number): string {
       )
     : ledgerRow(
         'Estimated saved',
-        `$${(s.saved_usd ?? 0).toFixed(2)}`,
+        usdFmt(s.saved_usd ?? 0),
         unpricedImaged > 0
           ? `${numFmt(unpricedImaged)} provider-priced request${unpricedImaged === 1 ? '' : 's'} excluded`
           : `at $${pa.input_per_mtok}/M base input price`,
-        '',
+        (s.saved_usd ?? 0) > 0 ? 'pos' : (s.saved_usd ?? 0) < 0 ? 'neg' : '',
         'Cache-aware estimate for requests covered by the configured pricing assumptions. Other providers remain excluded.',
       );
 
@@ -334,15 +346,15 @@ export function renderHeaderFragment(s: StatsPayload, port: number): string {
     ledgerRow(
       'Input tokens saved',
       numFmt(s.saved_input_tokens),
-      'vs sending the same context as text',
+      'vs the same context as text',
       'pos',
        'Bulky context sent as compact images instead of text. Uses provider-reported input tokens and a measured or model-profile text counterfactual; recent turns and output stay text.',
      ) +
     savedUsdRow +
     costRow +
-    ledgerRow('Requests', numFmt(s.requests), `${numFmt(s.compressed_requests)} turned into images`) +
+    ledgerRow('Requests', numFmt(s.requests), `<b>${numFmt(s.compressed_requests)}</b> sent as images`, '', '', true) +
     // NOTE: tests assert the header fragment contains the port number.
-    ledgerRow('Running for', formatDuration(s.uptime_sec), `on port ${port}`) +
+    ledgerRow('Running for', formatDuration(s.uptime_sec), `on port ${port}`, '', '', true) +
     `</dl></div>`;
 
   // math drawer
@@ -972,27 +984,27 @@ const CSS = `
   .theme-label { grid-column: 6; margin-left: .375rem; }
   /* the two switches: a track and a knob that slides across it, and stretches while pressed */
   .switch-btn, .theme-btn {
-    grid-row: 1; position: relative; flex: none; width: 2.875rem; height: 1.75rem; padding: 0;
-    border: 0; border-radius: 999px; background: var(--switch-off); cursor: pointer;
+    grid-row: 1; position: relative; flex: none; width: 2.5rem; height: 1.5rem; padding: 0;
+    border: 0; border-radius: .4375rem; background: var(--switch-off); cursor: pointer;
     box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .04), inset 0 1px 2px rgba(0, 0, 0, .10);
     transition: background-color .3s ease; -webkit-tap-highlight-color: transparent;
   }
   .switch-btn { grid-column: 5; }
   .theme-btn { grid-column: 7; }
   .switch-btn::after, .theme-btn .knob {
-    content: ""; position: absolute; top: .125rem; left: .125rem; width: 1.5rem; height: 1.5rem;
-    border-radius: 999px; background: #fff;
+    content: ""; position: absolute; top: .125rem; left: .125rem; width: 1.25rem; height: 1.25rem;
+    border-radius: .3125rem; background: #fff;
     box-shadow: 0 0 0 .5px rgba(0, 0, 0, .05), 0 3px 8px rgba(0, 0, 0, .16), 0 2px 1px rgba(0, 0, 0, .07);
     transition: left .3s cubic-bezier(.3, .8, .25, 1), width .3s cubic-bezier(.3, .8, .25, 1);
   }
-  .switch-btn:active::after, .theme-btn:active .knob { width: 1.8125rem; }
-  .switch-btn[aria-checked="true"]::after, .theme-btn[aria-checked="true"] .knob { left: 1.25rem; }
-  .switch-btn[aria-checked="true"]:active::after, .theme-btn[aria-checked="true"]:active .knob { left: .9375rem; }
+  .switch-btn:active::after, .theme-btn:active .knob { width: 1.5rem; }
+  .switch-btn[aria-checked="true"]::after, .theme-btn[aria-checked="true"] .knob { left: 1.125rem; }
+  .switch-btn[aria-checked="true"]:active::after, .theme-btn[aria-checked="true"]:active .knob { left: .875rem; }
   .switch-btn[aria-checked="true"] { background: var(--switch-on); }
   /* day and night: the knob carries a sun, then a moon */
   .theme-btn[aria-checked="true"] { background: var(--switch-night); }
   .theme-btn .knob { display: grid; place-items: center; }
-  .theme-btn .knob svg { grid-area: 1 / 1; width: .875rem; height: .875rem; transition: opacity .3s ease, transform .3s ease; }
+  .theme-btn .knob svg { grid-area: 1 / 1; width: .75rem; height: .75rem; transition: opacity .3s ease, transform .3s ease; }
   .theme-btn .sun { color: #e8a013; }
   .theme-btn .moon { color: #3d5a9e; opacity: 0; transform: rotate(-60deg) scale(.6); }
   .theme-btn[aria-checked="true"] .sun { opacity: 0; transform: rotate(60deg) scale(.6); }
@@ -1039,14 +1051,20 @@ const CSS = `
   #frag-header { grid-area: nums; min-width: 0; }
   .numbers { height: 100%; }
   .list-head { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-  .ledger { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); height: 100%; margin: 0; }
-  .ledger-row { position: relative; display: flex; flex-direction: column; gap: .125rem; min-width: 0; padding: 2.25rem 1.125rem 1rem; border-left: 1px solid var(--line-soft); }
-  .ledger dt { font-size: .75rem; font-weight: 500; color: var(--muted); }
+  /* no dividers: the space between columns separates them, and size and colour say which to read first */
+  .ledger { display: grid; grid-template-columns: 1.25fr 1.1fr 1.2fr .9fr .9fr; align-items: start; align-content: center; gap: 0 1.75rem; height: 100%; margin: 0; padding: 0 1.5rem 0 1.25rem; }
+  .ledger-row { position: relative; display: flex; flex-direction: column; gap: .3125rem; min-width: 0; padding: 1rem 0; }
+  .ledger dt { font-size: .8125rem; font-weight: 500; color: var(--muted); }
   .ledger dd { margin: 0; }
-  .ledger-val { font: 600 clamp(1.0625rem, 1.5vw, 1.375rem)/1.2 var(--mono); white-space: nowrap; letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--ink); }
-  .ledger-note { font-size: .75rem; line-height: 1.35; color: var(--faint); }
+  .ledger-val { font: 600 clamp(1.25rem, 1.75vw, 1.625rem)/1.15 var(--mono); white-space: nowrap; letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--ink); }
+  .ledger-note { font-size: .8125rem; line-height: 1.4; color: var(--muted); }
+  .ledger-note b { font-weight: 600; color: var(--ink); }
+  .ledger-row.quiet dt { color: var(--faint); }
+  .ledger-row.quiet .ledger-val { display: flex; align-items: flex-end; height: calc(clamp(1.25rem, 1.75vw, 1.625rem) * 1.15); font-size: clamp(1rem, 1.25vw, 1.125rem); font-weight: 500; line-height: 1.25; color: var(--muted); }
+  .ledger-row.quiet .ledger-note { color: var(--faint); }
+  .ledger-row.quiet .ledger-note b { color: var(--muted); }
   .ledger-val.pos { color: var(--accent-ink); }
-  .ledger-val.neg, .ledger-val.neg + .ledger-note { color: var(--red); }
+  .ledger-val.neg, .ledger-val.neg + .ledger-note, .ledger-val.neg + .ledger-note b { color: var(--red); }
   .ledger-val.muted-val { font-family: var(--sans); font-size: 1rem; font-weight: 400; letter-spacing: 0; color: var(--faint); }
   /* a label that explains itself on hover or keyboard focus */
   .q { cursor: help; text-decoration: underline dotted var(--line-strong); text-underline-offset: 3px; }
@@ -1110,8 +1128,8 @@ const CSS = `
     #frag-recent { max-height: none; }
   }
   @media (max-width: 1099px) {
-    .ledger { grid-auto-flow: row; grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr)); }
-    .ledger-row { padding: .75rem 1.125rem; }
+    .ledger { grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr)); align-items: start; gap: 0 1.5rem; padding: .5rem 1.125rem; }
+    .ledger-row { padding: .625rem 0; }
   }
   @media (max-width: 760px) {
     .wordmark, .switch-state, .theme-label, .hostchip { display: none; }
@@ -1124,7 +1142,6 @@ const CSS = `
     .head { border-radius: calc(var(--radius-pane) - 1px) calc(var(--radius-pane) - 1px) 0 0; }
     .record { flex-direction: column; align-items: stretch; gap: .375rem; padding: .625rem .75rem .75rem; }
     .gauge-track { flex: none; }
-    .ledger-row { border-left: 0; }
   }
 
   /* formulas */

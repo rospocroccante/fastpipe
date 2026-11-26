@@ -443,8 +443,8 @@ describe('dashboard page help UI', () => {
     } as StatsPayload, 47821);
 
     expect(html).toContain('$0.1607');
-    expect(html).toContain('vs $0.4854 without fastpipe');
-    expect(html).not.toContain('vs $0.0722 without fastpipe');
+    expect(html).toContain('vs $0.4854 as text');
+    expect(html).not.toContain('vs $0.0722 as text');
     expect(html).toContain('same paid imaged requests');
   });
 });
