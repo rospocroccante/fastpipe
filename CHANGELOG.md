@@ -11,6 +11,7 @@ First release on npm, as `fastpipe-proxy`. The command it installs is `fastpipe`
 This section lists what the fastpipe fork changes on top of pxpipe 0.16.0.
 
 ### Added
+- **Benchmark charts in the README.** `bench/charts.mjs` draws them from the measured figures, for a light and for a dark page.
 - **Benchmark scripts in `bench/`.** `latency.mts` times the local transform of a source tree on a seeded synthetic request, and `equivalence.mts` checks that two trees produce the same JSON and the same pixels. The README has the numbers against pxpipe 0.16.0 and the commands to repeat them.
 - **One retry on a connection-level upstream failure.** A request that fails before any response headers arrive (stale keep-alive socket, reset, short network drop) is sent once more on a fresh connection. Only buffered bodies are replayed. Timeouts and client disconnects are not retried. The event records that a retry happened.
 - **The `fastpipe` launcher runs on Linux and Windows.** The service runs under the systemd user manager on Linux when there is one, and as a detached background process with a login entry on Windows and on Linux without systemd. macOS keeps launchd. `FASTPIPE_SERVICE=launchd|systemd|process` overrides the choice. `fastpipe on`, `off`, `status`, `pause`, `resume`, `restart` and `direct` ship with the package.

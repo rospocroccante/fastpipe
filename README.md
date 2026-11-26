@@ -7,14 +7,22 @@
 
 <h1 align="center">fastpipe</h1>
 
-<p align="center">A local proxy that sends the bulky parts of a coding agent's context as images, so the same session costs fewer input tokens. A faster fork of pxpipe.</p>
+<p align="center"><b>pxpipe, up to 3.9 times faster. Same pixels.</b></p>
 
 <p align="center">
+  <a href="https://www.npmjs.com/package/fastpipe-proxy"><img alt="npm: fastpipe-proxy" src="https://img.shields.io/badge/npm-fastpipe--proxy-CB3837?logo=npm&logoColor=white"></a>
   <a href="LICENSE"><img alt="Licence: MIT" src="https://img.shields.io/badge/licence-MIT-blue"></a>
   <a href="#install"><img alt="Node 20.19 or later" src="https://img.shields.io/badge/node-%3E%3D20.19-339933?logo=nodedotjs&logoColor=white"></a>
   <a href="tsconfig.json"><img alt="TypeScript strict" src="https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white"></a>
   <a href="#commands"><img alt="Platforms: macOS, Linux and Windows" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-555555"></a>
   <a href="https://github.com/teamchong/pxpipe"><img alt="Fork of pxpipe 0.16.0" src="https://img.shields.io/badge/fork%20of-pxpipe%200.16.0-1f6feb"></a>
+</p>
+
+<p align="center">
+  <a href="#commands"><img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-D97757?logo=claude&logoColor=white"></a>
+  <a href="#commands"><img alt="Gemini" src="https://img.shields.io/badge/Gemini-4285F4?logo=googlegemini&logoColor=white"></a>
+  <a href="#commands"><img alt="OpenCode" src="https://img.shields.io/badge/OpenCode-211E1E?logo=opencode&logoColor=white"></a>
+  <a href="#commands"><img alt="Codex" src="https://img.shields.io/badge/Codex-10A37F"></a>
 </p>
 
 <p align="center">
@@ -26,22 +34,36 @@
   <a href="SECURITY.md">Security</a>
 </p>
 
-fastpipe runs on your machine, between a coding agent and the model provider. Before a request leaves, it renders the system prompt, the tool documentation and the older history as dense PNG pages, and leaves the recent turns as text. An image is billed by its pixel size, not by the amount of text inside it, so the same context costs fewer input tokens. Responses pass through unchanged.
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/bench-latency-dark.svg">
+    <img src="assets/bench-latency.svg" width="840" alt="Time added to a request before it goes upstream. First request of a process: pxpipe 0.16.0 2,715 ms, fastpipe 1,086 ms. Same request again: 433 ms and 115 ms. Next turn of the session: 425 ms and 109 ms.">
+  </picture>
+</p>
 
-The method, the renderer and the model evaluations come from [pxpipe](https://github.com/teamchong/pxpipe) by teamchong. This fork is based on pxpipe 0.16.0. It makes the local transform faster, adds a service launcher for macOS, Linux and Windows, and replaces the dashboard. The [pxpipe guide](docs/pxpipe.md) holds the upstream README, with the full method, the supported models and their limits.
+<table align="center">
+  <tr>
+    <td align="center"><h3>3.9×</h3>faster per turn</td>
+    <td align="center"><h3>57%</h3>smaller requests</td>
+    <td align="center"><h3>52%</h3>fewer input tokens than text</td>
+  </tr>
+</table>
+
+fastpipe is a fork of [pxpipe](https://github.com/teamchong/pxpipe) 0.16.0 by teamchong. It sends the bulky parts of a coding agent's context as images, which cost fewer input tokens than the same text. The method and the model evaluations are pxpipe's, and the [pxpipe guide](docs/pxpipe.md) explains them.
 
 ## Install
 
-You need Node 20.19 or later.
-
 ```bash
 npm install -g fastpipe-proxy
-fastpipe on      # starts the service and hooks Claude Code
+fastpipe on
 ```
 
-The package is called `fastpipe-proxy` and the command it installs is `fastpipe`. To upgrade, run `npm install -g fastpipe-proxy@latest` and then `fastpipe restart`.
+Node 20.19 or later. Open a new Claude Code session after `fastpipe on`.
 
-To build from source instead, you also need pnpm:
+To upgrade: `npm install -g fastpipe-proxy@latest`, then `fastpipe restart`.
+
+<details>
+<summary>Build from source</summary>
 
 ```bash
 git clone https://github.com/rospocroccante/fastpipe
@@ -52,54 +74,49 @@ node scripts/fastpipe-ctl.mjs install   # copies the build to ~/.fastpipe/app an
 fastpipe on
 ```
 
-`fastpipe on` writes `ANTHROPIC_BASE_URL` into `~/.claude/settings.json`, which Claude Code reads when a session starts. Sessions that are already open keep their old connection, so start a new one. To upgrade a source install, pull, build and run the last two commands again.
+</details>
 
-With nothing set, fastpipe images the requests for Fable 5, Opus 5.5 and the Gemini models (default `PXPIPE_MODELS=claude-fable-5,claude-opus-5-5,gemini`). Every other model passes through as text until you turn it on in the dashboard. Image compression is validated for Fable 5, Gemini 3.6 Flash and Gemini 3.7 Flash, and other families can use more tokens instead of fewer. The [pxpipe guide](docs/pxpipe.md#the-honest-part) has the measurements per model.
+Imaged with nothing set: Fable 5, Opus 5.5 and Gemini (default `PXPIPE_MODELS=claude-fable-5,claude-opus-5-5,gemini`). Other models pass through as text. Validated on Fable 5, Gemini 3.6 Flash and Gemini 3.7 Flash. [Measurements per model](docs/pxpipe.md#the-honest-part).
 
 ## Commands
 
-The commands are the same on macOS, Linux and Windows.
-
 ```bash
-fastpipe on        # start the service, wait until it answers, then hook Claude Code
+fastpipe on        # start the service and hook Claude Code
 fastpipe status    # what is running, hooked and paused
-fastpipe pause     # pass every request through untouched, no restart
+fastpipe pause     # pass every request through untouched
 fastpipe resume    # transform again
 fastpipe restart   # load a newly installed build
-fastpipe off       # pause, unhook Claude Code and stop the service
-fastpipe direct    # run one Claude Code session straight to Anthropic
+fastpipe off       # unhook Claude Code and stop the service
+fastpipe direct    # one Claude Code session straight to Anthropic
 ```
 
-A watchdog removes the `ANTHROPIC_BASE_URL` setting after two failed health checks and restores it when the proxy answers again, so a stopped proxy cannot leave new sessions without a connection.
-
-The service runs under launchd on macOS and under the systemd user manager on Linux. On Windows, and on Linux without systemd, it runs as a detached background process, and a login entry (the Startup folder on Windows, XDG autostart on Linux desktops) brings it back after a reboot. `FASTPIPE_SERVICE=launchd|systemd|process` overrides the choice.
-
-The launcher has been in daily use on macOS. The Linux and Windows paths are covered by the test suite and have not yet been run for a full week on those systems.
-
-Any other command goes to the proxy CLI of pxpipe, so `fastpipe warp -- claude` and `fastpipe stats` work as the [pxpipe guide](docs/pxpipe.md) describes for `pxpipe`.
+- Other agents: `fastpipe warp -- opencode`, `fastpipe warp -- codex`, `fastpipe warp -- agy`. See the [pxpipe guide](docs/pxpipe.md).
+- A watchdog unhooks Claude Code when the proxy stops answering and hooks it back when it returns.
+- Runs under launchd, the systemd user manager, or as a background process with a login entry. `FASTPIPE_SERVICE=launchd|systemd|process` overrides the choice.
+- Daily use so far on macOS only. Linux and Windows are covered by the tests.
 
 ## Dashboard
 
-The dashboard is at <http://127.0.0.1:47821/>. It opens on one strip: the share of input tokens saved, then tokens, dollars, cost per request, requests and uptime, and under them a pipe that shows how much of the context was sent and how much was not. The compression switch and the day and night switch sit at the right of the bar. The Advanced button opens four views: the images of the latest request next to their source text, the sessions, the model setup and the formulas behind every number.
+<http://127.0.0.1:47821/>. The saving first, the detail behind one button.
 
 ## What the fork changes
 
-- **Faster local transform.** Rendered pages are written as palette PNGs at 1 to 8 bits per pixel, base64 uses the native encoder and is kept per page, the scan that builds the exact-value factsheet is kept per text, and a few pages render at the same time. The pixels are the ones pxpipe produces. The numbers are under [Benchmarks](#benchmarks).
-- **Service launcher.** `fastpipe on` and `fastpipe off` replace the manual setup of the proxy and of the Claude Code setting, with a watchdog, a pause switch and a way back to a direct connection.
-- **One-screen dashboard.** It reads from left to right, starts with the saving and keeps the detail behind one button.
-- **One retry on a dropped connection.** A request that fails before any response arrives is sent once more on a fresh connection.
-- **Request bodies up to 32 MiB.** Long Claude Code sessions pass the 16 MiB limit of pxpipe and were refused with a 413. `PXPIPE_MAX_REQUEST_BYTES` still overrides the default.
-- **Tool changes survive history collapse.** A tool added in the collapsed part of a conversation and removed later no longer makes the API refuse the request with `tool_reference_unresolved`.
-- **No conversation capture by default.** The launcher no longer writes the body of refused requests to disk. `FASTPIPE_DEBUG_CAPTURE_4XX=1 fastpipe on` turns it on for debugging.
-- **Local by default.** The proxy listens on `127.0.0.1`, and the event log and the session state stay in `~/.fastpipe` on the machine that runs it.
+- Palette PNGs, cached base64 and factsheet, pages rendered in parallel. Same pixels.
+- `fastpipe on` and `fastpipe off`, with a watchdog and a pause switch.
+- One-screen dashboard.
+- One retry on a dropped connection.
+- Request bodies up to 32 MiB, up from 16. `PXPIPE_MAX_REQUEST_BYTES` overrides.
+- Tool changes survive history collapse. No more `tool_reference_unresolved`.
+- Refused requests are not written to disk. `FASTPIPE_DEBUG_CAPTURE_4XX=1 fastpipe on` turns capture on.
+- Listens on `127.0.0.1`. Data stays in `~/.fastpipe`.
 
-The [changelog](CHANGELOG.md) has the detail of each change.
+Detail in the [changelog](CHANGELOG.md).
 
 ## Benchmarks
 
 ### Local transform
 
-The time fastpipe adds to a request before it goes upstream, on the same request for both trees. The request is synthetic and shaped like a long Claude Code session: 200 tool-call turns, 40 tool definitions and a large system prompt, 1.02 MB of JSON that becomes 55 pages on the `claude-fable-5-2` profile.
+One synthetic long Claude Code session: 200 tool-call turns, 40 tools, 1.02 MB of JSON, 55 pages on `claude-fable-5-2`. Median of 7 runs, fresh process each, Apple M4 Pro, Node 24.22.
 
 | | pxpipe 0.16.0 | fastpipe | Change |
 |---|---:|---:|---:|
@@ -109,11 +126,20 @@ The time fastpipe adds to a request before it goes upstream, on the same request
 | Request body sent upstream | 10.57 MB | 4.51 MB | 57% smaller |
 | Images in the request | 55 | 55 | same |
 
-Each figure is the median of 7 runs, every run in a fresh process, on an Apple M4 Pro with Node 24.22. The `claude-fable-5` and `gemini-4-argon` profiles give 2,684 to 1,103 ms and 2,700 to 1,110 ms on the first request, with bodies of 10.32 and 4.43 MB.
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/bench-body-dark.svg">
+    <img src="assets/bench-body.svg" width="840" alt="Size of the request sent upstream: pxpipe 0.16.0 10.57 MB, fastpipe 4.51 MB, with the same 55 images.">
+  </picture>
+</p>
 
-The second script checks that the speed costs nothing in content. On five model profiles the JSON around the images is identical in the two trees, and every image decodes to the same pixels. Image tokens are billed on pixel size, so the smaller body changes the upload time and leaves the bill as it was.
+Same JSON and same pixels on five model profiles, checked by `bench/equivalence.mts`. Images are billed on pixel size, so the bill stays the same.
 
-To run both on your machine, from the root of this repository:
+Other profiles, first request: `claude-fable-5` 2,684 to 1,103 ms, `gemini-4-argon` 2,700 to 1,110 ms.
+
+Local work only. The time the provider takes to read the images is unchanged.
+
+Run it yourself:
 
 ```bash
 git remote add upstream https://github.com/teamchong/pxpipe
@@ -124,15 +150,21 @@ ln -s "$PWD/node_modules" ../pxpipe-0.16.0/node_modules
 npx tsx bench/latency.mts ../pxpipe-0.16.0     # pxpipe
 npx tsx bench/latency.mts .                    # fastpipe
 npx tsx bench/equivalence.mts ../pxpipe-0.16.0 # same JSON, same pixels
+node bench/charts.mjs                          # redraw the charts
 ```
-
-These numbers cover the local work only. The time the provider takes to read the images is the larger part of the latency of an imaged request, and this fork does not change the number of images.
 
 ### Real use
 
-During the trial on one machine, from 11 to 26 November 2026, the proxy handled 9,736 Claude Code requests and imaged 9,545 of them. They were billed for 169 million input tokens where the same context as text would have been billed for 354 million, both after cache discounts: 52% fewer.
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/bench-tokens-dark.svg">
+    <img src="assets/bench-tokens.svg" width="840" alt="Input tokens billed over 9,736 Claude Code requests: 354 million as text, 169 million through fastpipe.">
+  </picture>
+</p>
 
-Two limits apply to this figure. The text side is the proxy's own count of what each request would have cost without imaging, taken on the same request, and not a second session run without the proxy. And the saving comes from the method of pxpipe: the fork changes how fast a request is prepared, not which parts of it become images.
+One machine, 11 to 26 November 2026. 9,736 requests, 9,545 imaged.
+
+The text figure is the proxy's own count on the same requests, with no second run without the proxy. The saving is pxpipe's method, and the fork leaves it as it is.
 
 ## Licence
 
