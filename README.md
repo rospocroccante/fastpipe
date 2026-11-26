@@ -32,7 +32,16 @@ The method, the renderer and the model evaluations come from [pxpipe](https://gi
 
 ## Install
 
-You need Node 20.19 or later and pnpm.
+You need Node 20.19 or later.
+
+```bash
+npm install -g fastpipe-proxy
+fastpipe on      # starts the service and hooks Claude Code
+```
+
+The package is called `fastpipe-proxy` and the command it installs is `fastpipe`. To upgrade, run `npm install -g fastpipe-proxy@latest` and then `fastpipe restart`.
+
+To build from source instead, you also need pnpm:
 
 ```bash
 git clone https://github.com/rospocroccante/fastpipe
@@ -40,10 +49,10 @@ cd fastpipe
 pnpm install
 pnpm run build
 node scripts/fastpipe-ctl.mjs install   # copies the build to ~/.fastpipe/app and adds the fastpipe command
-fastpipe on                             # starts the service and hooks Claude Code
+fastpipe on
 ```
 
-`fastpipe on` writes `ANTHROPIC_BASE_URL` into `~/.claude/settings.json`, which Claude Code reads when a session starts. Sessions that are already open keep their old connection, so start a new one. To upgrade, pull, build and run the last two commands again.
+`fastpipe on` writes `ANTHROPIC_BASE_URL` into `~/.claude/settings.json`, which Claude Code reads when a session starts. Sessions that are already open keep their old connection, so start a new one. To upgrade a source install, pull, build and run the last two commands again.
 
 With nothing set, fastpipe images the requests for Fable 5, Opus 5.5 and the Gemini models (default `PXPIPE_MODELS=claude-fable-5,claude-opus-5-5,gemini`). Every other model passes through as text until you turn it on in the dashboard. Image compression is validated for Fable 5, Gemini 3.6 Flash and Gemini 3.7 Flash, and other families can use more tokens instead of fewer. The [pxpipe guide](docs/pxpipe.md#the-honest-part) has the measurements per model.
 

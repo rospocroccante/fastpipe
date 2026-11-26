@@ -4,7 +4,9 @@ All notable changes to pxpipe are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor = features /
 behavioral changes, patch = fixes).
 
-## Unreleased
+## 0.17.0 — 2026-11-27
+
+First release on npm, as `fastpipe-proxy`. The command it installs is `fastpipe`.
 
 This section lists what the fastpipe fork changes on top of pxpipe 0.16.0.
 

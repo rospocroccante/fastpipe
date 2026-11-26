@@ -1,6 +1,6 @@
 {
-  "name": "fastpipe",
-  "version": "0.16.0-fastpipe.4",
+  "name": "fastpipe-proxy",
+  "version": "0.17.0",
   "description": "Token-saving proxy for Claude Code: renders bulky context (system prompt, tool docs, old history) as dense PNGs to cut input tokens. Runs on Node and Cloudflare Workers.",
   "type": "module",
   "bin": {
