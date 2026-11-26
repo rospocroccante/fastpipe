@@ -1010,12 +1010,9 @@ const CSS = `
   .theme-btn[aria-checked="true"] .sun { opacity: 0; transform: rotate(60deg) scale(.6); }
   .theme-btn[aria-checked="true"] .moon { opacity: 1; transform: none; }
   .switch-btn:focus-visible, .theme-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  /* the note on which models are validated opens from the mark next to the name */
-  .brand-tip {
-    position: relative; flex: none; display: inline-grid; place-items: center; width: 1.125rem; height: 1.125rem;
-    border-radius: 50%; background: var(--raise); border: 1px solid var(--line); text-decoration: none;
-    font-size: .6875rem; font-weight: 600; color: var(--muted);
-  }
+  /* the note on which models are validated opens from the logo */
+  .brand-tip { position: relative; flex: none; display: inline-flex; border-radius: .375rem; text-decoration: none; }
+  .brand-tip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .brand-tip::after { left: 0; right: auto; top: calc(100% + .375rem); width: min(21rem, 80vw); }
   .banner { grid-column: 1 / -1; grid-row: 2; padding: .5rem .75rem; border-radius: var(--radius); background: color-mix(in srgb, var(--red) 12%, transparent); font-size: .8125rem; color: var(--muted); }
   .banner strong { color: var(--red); }
@@ -1437,9 +1434,8 @@ export function renderPage(port: number, hostLabel = ''): string {
 
 <header class="bar">
   <div class="brand">
-    ${LOGO}
+    <span class="q brand-tip" tabindex="0" role="note" aria-label="Which models image compression is validated for" data-tip="Image compression is validated for Fable 5, Gemini 3.6 Flash and Gemini 3.7 Flash. Other families can use more tokens. Opt in only for deliberate experiments.">${LOGO}</span>
     <h1 class="sr-only">fastpipe</h1>
-    <span class="q brand-tip" tabindex="0" role="note" aria-label="Which models image compression is validated for" data-tip="Image compression is validated for Fable 5, Gemini 3.6 Flash and Gemini 3.7 Flash. Other families can use more tokens. Opt in only for deliberate experiments.">?</span>
     ${host ? `<span class="hostchip" title="proxy host">${host}</span>` : ''}
   </div>
   <button class="mini-btn adv-btn" type="button" id="adv-btn" aria-expanded="false" aria-controls="advanced" onclick="ppAdvanced()">Advanced</button>

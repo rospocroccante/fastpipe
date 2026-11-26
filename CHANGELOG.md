@@ -8,9 +8,9 @@ behavioral changes, patch = fixes).
 
 ### Changed
 - **The dashboard shows two records.** The saving and its numbers are on top, and the recent requests table sits under them, always polled. The Images view keeps the breakdown and the latest image.
-- **The bar has no wordmark.** The logo stays, and the name is kept for screen readers.
+- **The bar has no wordmark and no question mark.** The note on validated models opens from the logo, and the name is kept for screen readers.
 - **Body text uses the facebook.com font stack** (Segoe UI, Helvetica, Arial). Numbers stay monospaced.
-- **The README opens with a cover**: the white logo and "Bulky context, shipped faster." on blue.
+- **The README opens with a cover**: "fastpipe" in white on blue, with the logo as its "f", and "Bulky context, shipped faster." under it.
 
 ## 0.17.0 — 2026-11-27
 

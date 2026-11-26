@@ -92,8 +92,9 @@ describe('dashboard screen', () => {
     expect(html).toContain("localStorage.getItem('pp-adv')");
   });
 
-  it('says which models are validated from the mark next to the name', () => {
-    const tip = barMarkup().match(/<span class="q brand-tip" tabindex="0"[^>]*data-tip="([^"]+)">\?<\/span>/);
+  it('says which models are validated from the logo, with no question mark', () => {
+    const tip = barMarkup().match(/<span class="q brand-tip" tabindex="0"[^>]*data-tip="([^"]+)"><svg /);
+    expect(barMarkup()).not.toMatch(/>\?<\/span>/);
     expect(tip?.[1]).toContain('Image compression is validated for Fable 5, Gemini 3.6 Flash and Gemini 3.7 Flash.');
     expect(viewMarkup('setup')).not.toContain('validated for');
   });
