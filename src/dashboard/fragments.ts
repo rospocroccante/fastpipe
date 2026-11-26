@@ -107,6 +107,7 @@ export function renderModelsFragment(
   active: string[],
   configured: string[],
   enabled: boolean,
+  part: 'all' | 'picker' | 'csv' = 'all',
 ): string {
   const on = new Set(active);
   const labelOf = new Map(
@@ -150,6 +151,21 @@ export function renderModelsFragment(
   const moot = enabled
     ? ''
     : `<div class="models"><span class="hint">compression is off, these settings have no effect right now</span></div>`;
+  if (part === 'picker') return renderModelPicker(ids, on, labelOf, enabled);
+  const csvBox =
+    `<div class="models">` +
+    `<span class="models-label">PXPIPE_MODELS</span>` +
+    `<input class="models-csv" id="models-csv" type="text" name="list" ` +
+    `value="${escapeHtml(active.join(','))}" spellcheck="false" autocomplete="off" ` +
+    `hx-post="/fragments/models?part=csv" hx-target="#frag-models" hx-trigger="change">` +
+    `<span class="hint">CSV of bases, or off. Applies on enter or blur, export to persist.</span>` +
+    `</div>`;
+  if (part === 'csv') {
+    return (
+      `<p class="hint">The switches on the main screen pick the models. Claude: unlisted models get plain text. Gemini: on by default, switch it off to opt out. OpenAI Responses: opt-in, no Anthropic cache_control.</p>` +
+      csvBox
+    );
+  }
   // Every chip sits in one row, family after family, so the view never stacks rows of buttons.
   const family = (name: string, chips: string): string =>
     `<span class="chip-group"><span class="models-label" title="Image ${name} models">${name}</span>${chips}</span>`;
@@ -161,13 +177,36 @@ export function renderModelsFragment(
     family('OpenAI Responses', gptChips + grokChips + otherChips) +
     `</div><!-- /chips -->` +
     `<p class="hint">Claude: unlisted models get plain text. Gemini: on by default (100/100 vision reader), toggle off to opt out. OpenAI Responses: opt-in, no Anthropic cache_control.</p>` +
-    `<div class="models">` +
-    `<span class="models-label">PXPIPE_MODELS</span>` +
-    `<input class="models-csv" id="models-csv" type="text" name="list" ` +
-    `value="${escapeHtml(active.join(','))}" spellcheck="false" autocomplete="off" ` +
-    `hx-post="/fragments/models" hx-target="#frag-models" hx-trigger="change">` +
-    `<span class="hint">CSV of bases, or off. Applies on enter or blur, export to persist.</span>` +
-    `</div>`
+    csvBox
+  );
+}
+
+/** One switch per model in one row, family after family: the main screen's way to pick what gets compressed. */
+function renderModelPicker(ids: string[], on: Set<string>, labelOf: Map<string, string>, enabled: boolean): string {
+  const sw = (id: string): string => {
+    const lit = on.has(id);
+    const label = (labelOf.get(id) ?? id).replace(/ \(all versions\)$/, '');
+    return (
+      `<button class="mswitch" type="button" role="switch" aria-checked="${lit}" ` +
+      `title="${escapeHtml(`${lit ? 'Stop compressing' : 'Compress'} ${id}`)}" ` +
+      `hx-post="/fragments/models?part=picker" hx-target="#frag-picker" ` +
+      `hx-vals='${escapeHtml(`{"model":${JSON.stringify(id)},"on":${!lit}}`)}'>` +
+      `<span class="mswitch-name">${escapeHtml(label)}</span><span class="mswitch-track" aria-hidden="true"></span></button>`
+    );
+  };
+  const group = (name: string, list: string[]): string =>
+    list.length ? `<span class="pick-group"><span class="pick-family">${name}</span>${list.map(sw).join('')}</span>` : '';
+  const claude = ids.filter((id) => id.startsWith('claude'));
+  const gemini = ids.filter((id) => id.includes('gemini'));
+  const openai = ids.filter((id) => !id.startsWith('claude') && !id.includes('gemini'));
+  return (
+    `<div class="picker${enabled ? '' : ' picker-off'}">` +
+    `<span class="pick-title">${enabled ? 'Compress for' : 'Compression is off'}</span>` +
+    `<div class="pick-row">` +
+    group('Claude', claude) +
+    group('Gemini', gemini) +
+    group('OpenAI', openai) +
+    `</div></div>`
   );
 }
 
@@ -231,11 +270,25 @@ export function renderSessionSummaryFragment(s: StatsPayload): string {
     ? `<span class="rec-name">Text baseline not measured yet</span>`
     : `<span class="rec-name">${loss ? 'With fastpipe' : 'Without fastpipe'}</span><span class="rec-num">${kFmt(whole)}</span>`;
 
+  // The money next to the percentage: saved in blue, wasted in red. Providers without
+  // configured pricing are left out of the dollars, and the note says how many.
+  const paid = s.compressed_paid_requests ?? 0;
+  const unpriced = Math.max(0, measured - paid);
+  const usd = s.saved_usd ?? 0;
+  const money = paid > 0
+    ? `<p class="head-money${usd < 0 ? ' neg' : ''}" title="${escapeHtml(usdFmt(usd))}"><span class="gauge-num">${bigUsd(usd)}</span> ${usd < 0 ? 'wasted' : 'saved'}</p>`
+    : '';
+  const moneyNote = paid === 0
+    ? ' No provider pricing for these requests, so no dollars.'
+    : unpriced > 0
+      ? ` Dollars leave out ${numFmt(unpriced)} provider-priced request${unpriced === 1 ? '' : 's'}.`
+      : '';
+
   return (
     `<div class="gauge${loss ? ' gauge-loss' : ''}">` +
-    `<header class="head"><h2 class="head-title"><span class="gauge-num">${Math.abs(inputPct).toFixed(0)}%</span> ` +
-    `${loss ? 'more input tokens' : 'fewer input tokens'}</h2>` +
-    `<p class="head-sub">Since start, after cache discounts. ${numFmt(measured)} request${measured === 1 ? '' : 's'} imaged.</p></header>` +
+    `<header class="head"><div class="head-figs"><h2 class="head-title"><span class="gauge-num">${Math.abs(inputPct).toFixed(0)}%</span> ` +
+    `${loss ? 'more input tokens' : 'fewer input tokens'}</h2>${money}</div>` +
+    `<p class="head-sub">Since start, after cache discounts. ${numFmt(measured)} request${measured === 1 ? '' : 's'} imaged.${moneyNote}</p></header>` +
     `<div class="record">` +
     `<div class="rec-head">${wholeLabel}</div>` +
     `<div class="gauge-track" role="img" aria-label="${spoken}" style="--cut:${rest > 0 ? (part > 0 ? partPct.toFixed(1) : '-100') : '200'}%">` +
@@ -262,6 +315,12 @@ function mathBlock(title: string, body: string): string {
 /** Dollars with thousands separators, so a four-digit saving reads at a glance. */
 function usdFmt(n: number): string {
   return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/** The headline dollars, unsigned: cents only below $100, where they still matter. */
+function bigUsd(n: number): string {
+  const a = Math.abs(n);
+  return a >= 100 ? `$${Math.round(a).toLocaleString('en-US')}` : usdFmt(a);
 }
 
 /**
@@ -323,24 +382,6 @@ export function renderHeaderFragment(s: StatsPayload, port: number): string {
         'The comparison appears after an imaged request returns provider usage.',
       );
 
-  const savedUsdRow = onlyUnpriced
-    ? ledgerRow(
-        'Estimated saved',
-        '—',
-        'provider pricing not configured',
-        'muted-val',
-        'Token savings are shown separately. Dollar estimates require provider-specific pricing and are not inferred from Claude rates.',
-      )
-    : ledgerRow(
-        'Estimated saved',
-        usdFmt(s.saved_usd ?? 0),
-        unpricedImaged > 0
-          ? `${numFmt(unpricedImaged)} provider-priced request${unpricedImaged === 1 ? '' : 's'} excluded`
-          : `at $${pa.input_per_mtok}/M base input price`,
-        (s.saved_usd ?? 0) > 0 ? 'pos' : (s.saved_usd ?? 0) < 0 ? 'neg' : '',
-        'Cache-aware estimate for requests covered by the configured pricing assumptions. Other providers remain excluded.',
-      );
-
   const ledger =
     `<div class="numbers"><h2 class="list-head">Since start</h2><dl class="ledger">` +
     ledgerRow(
@@ -350,7 +391,6 @@ export function renderHeaderFragment(s: StatsPayload, port: number): string {
       'pos',
        'Bulky context sent as compact images instead of text. Uses provider-reported input tokens and a measured or model-profile text counterfactual; recent turns and output stay text.',
      ) +
-    savedUsdRow +
     costRow +
     ledgerRow('Requests', numFmt(s.requests), `<b>${numFmt(s.compressed_requests)}</b> sent as images`, '', '', true) +
     // NOTE: tests assert the header fragment contains the port number.
@@ -932,7 +972,7 @@ const CSS = `
   *, *::before, *::after { transition: background-color .25s ease, border-color .25s ease, color .25s ease; }
   html { -webkit-text-size-adjust: 100%; background: var(--canvas); }
   body {
-    display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: .75rem;
+    display: grid; grid-template-rows: auto auto auto minmax(0, 1fr) auto; gap: .75rem;
     margin: 0 auto; max-width: 120rem; min-height: 100vh; padding: 0 .75rem .75rem;
     background:
       radial-gradient(68.75rem 38.75rem at 12% -12%, var(--tint-a), transparent 62%),
@@ -1029,7 +1069,7 @@ const CSS = `
 
   /* the strip: the saving on the left, the numbers after it, the pipe under both */
   .strip {
-    display: grid; grid-template-columns: minmax(24rem, 34%) minmax(0, 1fr); grid-template-areas: "head nums" "pipe pipe";
+    display: grid; grid-template-columns: minmax(30rem, 46%) minmax(0, 1fr); grid-template-areas: "head nums" "pipe pipe";
     background: var(--pane); border: 1px solid var(--line-soft); border-radius: var(--radius-pane);
   }
   #frag-session, .gauge { display: contents; }
@@ -1040,7 +1080,12 @@ const CSS = `
   }
   .gauge-loss .head { background: linear-gradient(to bottom, transparent 45%, var(--pane)), linear-gradient(to right, transparent 30%, var(--pane)), var(--band-loss); }
   .head-title { margin: 0; font-size: 1.125rem; font-weight: 600; line-height: 1.25; color: var(--muted); }
-  .gauge-num { display: block; margin-bottom: .375rem; font-size: clamp(4rem, 8vw, 6.5rem); font-weight: 700; line-height: 1; letter-spacing: -.04em; font-variant-numeric: tabular-nums; color: var(--ink); }
+  .head-figs { display: flex; flex-wrap: wrap; align-items: flex-end; gap: .75rem 2.5rem; }
+  .head-money { margin: 0; font-size: 1.125rem; font-weight: 600; line-height: 1.25; color: var(--muted); }
+  .head-money .gauge-num { color: var(--accent-ink); }
+  .head-money.neg .gauge-num, .head-money.neg { color: var(--red); }
+  .gauge-loss .head-title .gauge-num { color: var(--red); }
+  .gauge-num { display: block; margin-bottom: .375rem; font-size: clamp(3.5rem, 6vw, 5.5rem); font-weight: 700; line-height: 1; letter-spacing: -.04em; font-variant-numeric: tabular-nums; color: var(--ink); }
   .gauge-empty .head-title { font-size: 1.5rem; color: var(--ink); }
   .head-sub { margin: .375rem 0 0; font-size: .75rem; color: var(--muted); }
 
@@ -1049,7 +1094,7 @@ const CSS = `
   .numbers { height: 100%; }
   .list-head { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   /* no dividers: the space between columns separates them, and size and colour say which to read first */
-  .ledger { display: grid; grid-template-columns: 1.25fr 1.1fr 1.2fr .9fr .9fr; align-items: start; align-content: center; gap: 0 1.75rem; height: 100%; margin: 0; padding: 0 1.5rem 0 1.25rem; }
+  .ledger { display: grid; grid-template-columns: 1.25fr 1.2fr .9fr .9fr; align-items: start; align-content: center; gap: 0 1.75rem; height: 100%; margin: 0; padding: 0 1.5rem 0 1.25rem; }
   .ledger-row { position: relative; display: flex; flex-direction: column; gap: .3125rem; min-width: 0; padding: 1rem 0; }
   .ledger dt { font-size: .8125rem; font-weight: 500; color: var(--muted); }
   .ledger dd { margin: 0; }
@@ -1285,6 +1330,37 @@ const CSS = `
   .axis { margin-top: .625rem; font-size: .75rem; color: var(--faint); }
   .empty { padding: .875rem 0; font-size: .8125rem; color: var(--faint); }
 
+  /* main screen: one switch per model, in one row that scrolls sideways when it runs out of width */
+  .card.pick-card { padding: .875rem 1.5rem; }
+  .picker { display: flex; align-items: center; gap: 1.25rem; min-width: 0; }
+  .pick-title { flex: none; font-size: .9375rem; font-weight: 600; color: var(--ink); }
+  .picker-off .pick-title { color: var(--red); }
+  .picker-off .pick-row { opacity: .5; }
+  .pick-row {
+    display: flex; align-items: center; gap: .5rem; min-width: 0; padding: 2px 2rem 2px 2px; overflow-x: auto; scrollbar-width: none;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
+  }
+  .pick-row::-webkit-scrollbar { display: none; }
+  .pick-group { display: contents; }
+  .pick-family { flex: none; margin-left: .75rem; font-size: .75rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--faint); }
+  .pick-group:first-child .pick-family { margin-left: 0; }
+  .mswitch {
+    flex: none; display: inline-flex; align-items: center; gap: .5rem; padding: .3125rem .375rem .3125rem .75rem;
+    background: var(--raise); color: var(--muted); border: 1px solid var(--line); border-radius: .5rem;
+    font: 500 .8125rem/1.4 var(--sans); white-space: nowrap; cursor: pointer; transition: background-color .2s ease, color .2s ease, border-color .2s ease;
+  }
+  .mswitch:hover { border-color: var(--line-strong); }
+  .mswitch[aria-checked="true"] { color: var(--ink); }
+  .mswitch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .mswitch-track { position: relative; width: 1.75rem; height: 1rem; border-radius: .3125rem; background: var(--switch-off); transition: background-color .22s ease; }
+  .mswitch-track::after {
+    content: ""; position: absolute; top: .125rem; left: .125rem; width: .75rem; height: .75rem; border-radius: .1875rem;
+    background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .25); transition: left .22s cubic-bezier(.3, .8, .25, 1);
+  }
+  .mswitch[aria-checked="true"] .mswitch-track { background: var(--switch-on); }
+  .mswitch[aria-checked="true"] .mswitch-track::after { left: .875rem; }
+
   /* setup: every model is a key in one row that scrolls sideways when it runs out of width */
   .chips {
     display: flex; align-items: center; gap: .5rem; padding: 2px 2rem .625rem 2px; overflow-x: auto; scrollbar-width: thin;
@@ -1457,6 +1533,10 @@ export function renderPage(port: number, hostLabel = ''): string {
   <div id="frag-header" hx-get="/fragments/header" hx-select=".numbers" hx-trigger="load, every 2s" hx-swap="innerHTML"></div>
 </div><!-- /strip -->
 
+<section class="card pick-card" aria-label="Models to compress">
+  <div id="frag-picker" hx-get="/fragments/models?part=picker" hx-trigger="load, every 5s" hx-swap="innerHTML"></div>
+</section>
+
 <section class="card recent" aria-labelledby="recent-head">
   <h2 class="card-head" id="recent-head">Recent requests</h2>
   <div id="frag-recent" hx-get="/fragments/recent" hx-trigger="load, every 2s" hx-swap="innerHTML"></div>
@@ -1490,7 +1570,7 @@ export function renderPage(port: number, hostLabel = ''): string {
 <section class="view" id="v-setup" hidden>
   <div class="card">
     <h3 class="card-head">Image model scope</h3>
-    <div id="frag-models" hx-get="/fragments/models" hx-trigger="load, every 2s [!document.getElementById('v-setup').hidden && (!document.activeElement || document.activeElement.id !== 'models-csv')]" hx-swap="innerHTML"></div>
+    <div id="frag-models" hx-get="/fragments/models?part=csv" hx-trigger="load, every 2s [!document.getElementById('v-setup').hidden && (!document.activeElement || document.activeElement.id !== 'models-csv')]" hx-swap="innerHTML"></div>
     <p class="hint models-routing">This list only decides which models get images. Non-Anthropic IDs also need the routing settings described below.</p>
   </div>
   <div class="card help">

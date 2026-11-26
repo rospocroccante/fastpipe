@@ -10,6 +10,9 @@ behavioral changes, patch = fixes).
 - **The dashboard shows two records.** The saving and its numbers are on top, and the recent requests table sits under them, always polled. The Images view keeps the breakdown and the latest image.
 - **The bar has no wordmark and no question mark.** The note on validated models opens from the logo, and the name is kept for screen readers.
 - **Body text uses the facebook.com font stack** (Segoe UI, Helvetica, Arial). Numbers stay monospaced.
+- **Money sits beside the percentage.** The headline prints the input tokens saved or added and the dollars saved or wasted at the same size, red on a loss. The "Estimated saved" row is gone from the numbers.
+- **Models are picked with switches on the main screen**, one per model, family after family, between the numbers and the recent requests. The PXPIPE_MODELS text box stays in Setup.
+- **The cover's "f" is larger** and sits on the baseline of "astpipe".
 - **The README opens with a cover**: "fastpipe" in white on blue, with the logo as its "f", and "Bulky context, shipped faster." under it.
 
 ## 0.17.0 — 2026-11-27

@@ -142,6 +142,13 @@ describe('dashboard screen', () => {
     }
   });
 
+  it('puts the model switches between the strip and the recent requests', () => {
+    const at = (id: string): number => html.indexOf(`id="${id}"`);
+    expect(at('frag-picker')).toBeGreaterThan(at('frag-header'));
+    expect(at('frag-picker')).toBeLessThan(at('frag-recent'));
+    expect(panelTag('frag-picker')).toContain('hx-get="/fragments/models?part=picker"');
+  });
+
   it('never stops polling the picture, the numbers and the on/off switch', () => {
     for (const id of ['frag-session', 'frag-header', 'frag-toggle', 'frag-recent']) {
       expect(panelTag(id)).toContain('hx-trigger="load, every 2s');

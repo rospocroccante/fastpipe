@@ -108,11 +108,33 @@ describe('renderSessionSummaryFragment pipe', () => {
       payload({ baseline_input_weighted: 7000, actual_input_weighted: 1800 }),
     );
     expect(html).toMatch(
-      /<header class="head"><h2 class="head-title"><span class="gauge-num">74%<\/span> fewer input tokens<\/h2>/,
+      /<header class="head"><div class="head-figs"><h2 class="head-title"><span class="gauge-num">74%<\/span> fewer input tokens<\/h2>/,
     );
-    expect(html).toContain('<p class="head-sub">Since start, after cache discounts. 1 request imaged.</p>');
+    expect(html).toContain('<p class="head-sub">Since start, after cache discounts. 1 request imaged. No provider pricing for these requests, so no dollars.</p>');
     // the pipe sits in its own record under the head
     expect(html.indexOf('<div class="record">')).toBeGreaterThan(html.indexOf('</header>'));
+  });
+
+  it('prints the dollars saved beside the percentage, as large', () => {
+    const html = renderSessionSummaryFragment(
+      payload({ baseline_input_weighted: 7000, actual_input_weighted: 1800, compressed_paid_requests: 1, saved_usd: 1844.62 }),
+    );
+    expect(html).toContain('<p class="head-money" title="$1,844.62"><span class="gauge-num">$1,845</span> saved</p>');
+    expect(html.indexOf('head-money')).toBeLessThan(html.indexOf('</header>'));
+  });
+
+  it('prints wasted dollars in red and keeps cents under $100', () => {
+    const html = renderSessionSummaryFragment(
+      payload({ baseline_input_weighted: 1546, actual_input_weighted: 1863, compressed_paid_requests: 1, saved_usd: -3.5 }),
+    );
+    expect(html).toContain('<p class="head-money neg" title="$-3.50"><span class="gauge-num">$3.50</span> wasted</p>');
+  });
+
+  it('says how many requests the dollars leave out', () => {
+    const html = renderSessionSummaryFragment(
+      payload({ baseline_input_weighted: 7000, actual_input_weighted: 1800, compressed_requests: 3, compressed_paid_requests: 1, saved_usd: 2 }),
+    );
+    expect(html).toContain('Dollars leave out 2 provider-priced requests.');
   });
 
   it('on a net loss makes the pipe as long as what was sent and marks the excess', () => {

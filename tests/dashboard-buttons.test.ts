@@ -46,6 +46,30 @@ describe('image viewer buttons', () => {
   });
 });
 
+describe('model switches on the main screen', () => {
+  const html = renderModelsFragment(['claude-fable-5', 'gemini'], [], true, 'picker');
+
+  it('draws one switch per model, lit when the model is compressed', () => {
+    const on = [...html.matchAll(/<button class="mswitch"[^>]*aria-checked="true"[^>]*>/g)];
+    expect(on.length).toBeGreaterThanOrEqual(2);
+    expect(html).toMatch(/role="switch" aria-checked="true" title="Stop compressing claude-fable-5"/);
+    expect(html).toMatch(/role="switch" aria-checked="false" title="Compress claude-opus-5-5"/);
+  });
+
+  it('flips a model and redraws only the switches', () => {
+    expect(html).toContain('hx-post="/fragments/models?part=picker" hx-target="#frag-picker"');
+    expect(html).toContain(`hx-vals='{&quot;model&quot;:&quot;claude-opus-5-5&quot;,&quot;on&quot;:true}'`);
+  });
+
+  it('keeps the text box out of the main screen', () => {
+    expect(html).not.toContain('models-csv');
+  });
+
+  it('says so when compression is off', () => {
+    expect(renderModelsFragment(['claude-fable-5'], [], false, 'picker')).toContain('Compression is off');
+  });
+});
+
 describe('model chips', () => {
   const html = renderModelsFragment(['claude-fable-5', 'gemini'], [], true);
 

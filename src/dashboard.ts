@@ -1528,6 +1528,7 @@ export class DashboardState {
             getAllowedModelBases(),
             getConfiguredModelBases(),
             this.compressionEnabled,
+            modelsPart(url.searchParams.get('part')),
           ),
         );
       case 'context-map': {
@@ -1672,6 +1673,11 @@ export class DashboardState {
       // Persistence is best-effort; the live flip already took effect.
     }
   }
+}
+
+/** Which part of the model settings a fragment request wants: the switches on the main screen, the text box in Setup, or both. */
+function modelsPart(p: string | null): 'all' | 'picker' | 'csv' {
+  return p === 'picker' || p === 'csv' ? p : 'all';
 }
 
 function jsonResponse(body: unknown, status = 200): Response {

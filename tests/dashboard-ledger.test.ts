@@ -34,7 +34,6 @@ describe('dashboard numbers', () => {
   it('lists each number as a row with its value and a note', () => {
     expect(rows(renderHeaderFragment(stats(), 47821))).toEqual([
       ['Input tokens saved', '345,678', 'vs the same context as text'],
-      ['Estimated saved', '$30.00', 'at $10/M base input price'],
       ['Cost per request', '$0.2000', '−60% vs $0.5000 as text'], // 0.20 + 30 / 100
       ['Requests', '120', '100 sent as images'],
       ['Running for', '1h 2m 3s', 'on port 47821'],
@@ -53,10 +52,8 @@ describe('dashboard numbers', () => {
     expect(html).toContain('<dd class="ledger-note"><b>100</b> sent as images</dd>');
   });
 
-  it('separates the thousands of the dollars saved', () => {
-    expect(renderHeaderFragment(stats({ saved_usd: 1844.62 }), 47821)).toContain(
-      '<dd class="ledger-val pos">$1,844.62</dd>',
-    );
+  it('leaves the dollars to the headline, so they are not printed twice', () => {
+    expect(renderHeaderFragment(stats({ saved_usd: 1844.62 }), 47821)).not.toContain('Estimated saved');
   });
 
   it('heads the list with what the numbers cover', () => {
