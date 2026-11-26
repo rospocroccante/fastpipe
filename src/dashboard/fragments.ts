@@ -907,7 +907,7 @@ const CSS = `
     --pipe-quiet: #5d6880; --pipe-saved: #2468d8; --pipe-over: #b4283c; --switch-on: #34c759; --switch-off: rgba(120, 124, 136, .26); --switch-night: #3d5a9e;
     --float: 0 1rem 3rem rgba(20, 21, 26, .18);
     --radius: .625rem; --radius-pane: 1rem; --radius-small: .4375rem;
-    --sans: 'Geist Variable', 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    --sans: 'Segoe UI Historic', 'Segoe UI', Helvetica, Arial, sans-serif; /* the stack facebook.com uses for its text */
     --mono: 'Geist Mono Variable', 'Geist Mono', ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
     color-scheme: light;
   }
@@ -932,7 +932,7 @@ const CSS = `
   *, *::before, *::after { transition: background-color .25s ease, border-color .25s ease, color .25s ease; }
   html { -webkit-text-size-adjust: 100%; background: var(--canvas); }
   body {
-    display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: .75rem;
+    display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: .75rem;
     margin: 0 auto; max-width: 120rem; min-height: 100vh; padding: 0 .75rem .75rem;
     background:
       radial-gradient(68.75rem 38.75rem at 12% -12%, var(--tint-a), transparent 62%),
@@ -961,7 +961,7 @@ const CSS = `
   }
   .brand { grid-column: 1; grid-row: 1; display: flex; align-items: center; gap: .625rem; min-width: 0; margin-right: .75rem; }
   .logo { width: 1.5rem; height: 1.5rem; flex: none; color: var(--accent); }
-  .wordmark { margin: 0; font-size: .8125rem; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; color: var(--ink); }
+  .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   /* Which machine is this? Two dashboards from two hosts look identical otherwise. */
   .hostchip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .8125rem; color: var(--faint); }
   .adv-btn { grid-column: 2; grid-row: 1; }
@@ -1113,9 +1113,24 @@ const CSS = `
   .card { container-type: inline-size; }
   .card > [id^="frag-"] { flex: 1 1 auto; min-height: 0; overflow: auto; scrollbar-width: thin; }
   .card.help { display: block; overflow: auto; scrollbar-width: thin; }
-  #frag-recent { max-height: 23.25rem; }
+  #frag-recent { max-height: 30rem; }
+  /* the second record of the page: as wide as the strip, roomy rows, larger type */
+  .card.recent { padding: 1.25rem 1.5rem 1rem; }
+  .card.recent .card-head { margin-bottom: 1rem; font-size: 1.125rem; letter-spacing: -.01em; }
+  .card.recent .rtable { font-size: .875rem; }
+  .card.recent .rtable th { padding: .5rem .75rem .625rem; font-size: .75rem; letter-spacing: .04em; text-transform: uppercase; }
+  .card.recent .rtable td { padding: .625rem .75rem; }
+  .card.recent .rtable th:first-child, .card.recent .rtable td:first-child { padding-left: 0; }
+  /* with Advanced open the page scrolls and each Advanced record gets a fixed height */
+  body.adv-open { height: auto; overflow: visible; }
+  body.adv-open #frag-recent { max-height: 30rem; }
+  body.adv-open .view { grid-template-rows: none; }
   @media (min-width: 1100px) {
-    #v-images { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr); }
+    body.adv-open .view > .card { height: 32rem; }
+    body.adv-open #v-setup > .card:first-child { height: auto; }
+  }
+  @media (min-width: 1100px) {
+    #v-images { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); }
     #v-sessions { grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); }
     #v-setup { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
     #v-setup > .card:first-child { grid-column: 1 / -1; }
@@ -1132,7 +1147,7 @@ const CSS = `
     .ledger-row { padding: .625rem 0; }
   }
   @media (max-width: 760px) {
-    .wordmark, .switch-state, .theme-label, .hostchip { display: none; }
+    .switch-state, .theme-label, .hostchip { display: none; }
     .brand-tip::after { position: fixed; left: .5rem; right: .5rem; top: 3rem; width: auto; }
     .bar { grid-template-columns: max-content max-content max-content auto auto auto auto; padding-bottom: 2px; overflow-x: auto; scrollbar-width: none; }
     .brand { margin-right: 0; }
@@ -1360,6 +1375,7 @@ const GLUE_JS = `
   function ppAdvanced(open) {
     ppAdvOpen = open === undefined ? !ppAdvOpen : open;
     document.querySelector('.tabs').hidden = !ppAdvOpen;
+    document.body.classList.toggle('adv-open', ppAdvOpen);
     document.getElementById('adv-btn').setAttribute('aria-expanded', ppAdvOpen ? 'true' : 'false');
     try { localStorage.setItem('pp-adv', ppAdvOpen ? '1' : '0'); } catch (e) {}
     ppView(ppViewName);
@@ -1422,7 +1438,7 @@ export function renderPage(port: number, hostLabel = ''): string {
 <header class="bar">
   <div class="brand">
     ${LOGO}
-    <h1 class="wordmark">fastpipe</h1>
+    <h1 class="sr-only">fastpipe</h1>
     <span class="q brand-tip" tabindex="0" role="note" aria-label="Which models image compression is validated for" data-tip="Image compression is validated for Fable 5, Gemini 3.6 Flash and Gemini 3.7 Flash. Other families can use more tokens. Opt in only for deliberate experiments.">?</span>
     ${host ? `<span class="hostchip" title="proxy host">${host}</span>` : ''}
   </div>
@@ -1445,13 +1461,14 @@ export function renderPage(port: number, hostLabel = ''): string {
   <div id="frag-header" hx-get="/fragments/header" hx-select=".numbers" hx-trigger="load, every 2s" hx-swap="innerHTML"></div>
 </div><!-- /strip -->
 
+<section class="card recent" aria-labelledby="recent-head">
+  <h2 class="card-head" id="recent-head">Recent requests</h2>
+  <div id="frag-recent" hx-get="/fragments/recent" hx-trigger="load, every 2s" hx-swap="innerHTML"></div>
+</section>
+
 <!-- Advanced: closed until its button is pressed. One view at a time, picked in the bar; a view that is not showing loads once and then stops polling. -->
 <main class="views" id="advanced">
 <section class="view" id="v-images" hidden>
-  <div class="card">
-    <h3 class="card-head">Recent requests</h3>
-    <div id="frag-recent" hx-get="/fragments/recent" hx-trigger="load, every 2s [!document.getElementById('v-images').hidden]" hx-swap="innerHTML"></div>
-  </div>
   <div class="card">
     <h3 class="card-head">Image vs text breakdown</h3>
     <div id="frag-context-map" hx-get="/fragments/context-map" hx-trigger="load" hx-swap="innerHTML"></div>

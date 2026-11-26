@@ -1,11 +1,6 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
-    <img src="assets/logo.svg" width="96" alt="fastpipe logo">
-  </picture>
+  <img src="assets/cover.svg" width="100%" alt="fastpipe. Bulky context, shipped faster.">
 </p>
-
-<h1 align="center">fastpipe</h1>
 
 <p align="center"><b>pxpipe, up to 3.9 times faster. Same pixels.</b></p>
 

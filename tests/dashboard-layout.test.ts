@@ -99,7 +99,7 @@ describe('dashboard screen', () => {
   });
 
   it('puts each live panel inside its view', () => {
-    for (const id of ['frag-recent', 'frag-context-map', 'frag-latest']) {
+    for (const id of ['frag-context-map', 'frag-latest']) {
       expect(viewMarkup('images')).toContain(`id="${id}"`);
     }
     for (const id of ['frag-sessions', 'frag-stats']) {
@@ -109,9 +109,21 @@ describe('dashboard screen', () => {
     expect(viewMarkup('math')).toContain('id="frag-math"');
   });
 
+  it('shows the recent requests under the strip, outside Advanced', () => {
+    const html = renderPage(47821);
+    const strip = html.indexOf('<!-- /strip -->');
+    const recent = html.indexOf('id="frag-recent"');
+    const advanced = html.indexOf('<main class="views" id="advanced">');
+    expect(strip).toBeLessThan(recent);
+    expect(recent).toBeLessThan(advanced);
+  });
+
+  it('keeps the name for screen readers only, not as text in the bar', () => {
+    expect(barMarkup()).toContain('<h1 class="sr-only">fastpipe</h1>');
+  });
+
   it('polls a panel only while its view is showing', () => {
     const owner: Record<string, string> = {
-      'frag-recent': 'images',
       'frag-latest': 'images',
       'frag-sessions': 'sessions',
       'frag-stats': 'sessions',
@@ -130,7 +142,7 @@ describe('dashboard screen', () => {
   });
 
   it('never stops polling the picture, the numbers and the on/off switch', () => {
-    for (const id of ['frag-session', 'frag-header', 'frag-toggle']) {
+    for (const id of ['frag-session', 'frag-header', 'frag-toggle', 'frag-recent']) {
       expect(panelTag(id)).toContain('hx-trigger="load, every 2s');
     }
   });

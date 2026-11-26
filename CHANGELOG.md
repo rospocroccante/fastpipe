@@ -4,6 +4,14 @@ All notable changes to pxpipe are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor = features /
 behavioral changes, patch = fixes).
 
+## Unreleased
+
+### Changed
+- **The dashboard shows two records.** The saving and its numbers are on top, and the recent requests table sits under them, always polled. The Images view keeps the breakdown and the latest image.
+- **The bar has no wordmark.** The logo stays, and the name is kept for screen readers.
+- **Body text uses the facebook.com font stack** (Segoe UI, Helvetica, Arial). Numbers stay monospaced.
+- **The README opens with a cover**: the white logo and "Bulky context, shipped faster." on blue.
+
 ## 0.17.0 — 2026-11-27
 
 First release on npm, as `fastpipe-proxy`. The command it installs is `fastpipe`.
