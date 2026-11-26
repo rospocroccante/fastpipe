@@ -15,7 +15,7 @@ import type { CacheControl, ContentBlock, ImageBlock, Message, TextBlock, ToolUs
 import type { RenderedImage } from './render.js';
 import { DENSE_CONTENT_CHARS_PER_IMAGE, DENSE_CONTENT_COLS, maxCharsPerImage, DENSE_RENDER_STYLE, MAX_HEIGHT_PX, neutralizeSentinel, reflow, renderTextToPngsWithCharLimit, roleSlotSegment, SLOT_MARK_ASSISTANT, SLOT_MARK_USER, type RenderStyle } from './render.js';
 import { factSheetText } from './factsheet.js';
-import { bytesToBase64 } from './png.js';
+import { renderedPngBase64 } from './png.js';
 
 /**
  * Banner text blocks that bracket the collapsed-history image(s) in the synthetic
@@ -110,6 +110,9 @@ export const ANTHROPIC_MAX_IMAGES = 100;
  *  and tool_result images that share the same request. transform.ts narrows this
  *  further with the count it has already emitted for this very request. */
 export const ANTHROPIC_HISTORY_IMAGE_BUDGET = 80;
+
+/** History chunks rendered ahead of the one being assembled (bounds peak memory). */
+const HISTORY_RENDER_LOOKAHEAD = 3;
 
 export const HISTORY_DEFAULTS: HistoryCollapseOptions = {
   keepTail: 4,
@@ -688,7 +691,7 @@ async function userTurnBlocks(
         source: {
           type: 'base64',
           media_type: 'image/png',
-          data: bytesToBase64(img.png),
+          data: renderedPngBase64(img.png),
         },
       } as ContentBlock);
       onImage(img);
@@ -737,6 +740,162 @@ function latestCollapsedUserPointer(
  * Returns original messages unchanged on any no-collapse path (reason set in info).
  * Image blocks are returned with NO cache_control — caller decides placement.
  */
+// ---- Mid-conversation tool changes ----
+//
+// Claude Code announces a tool that appears or disappears during a session with a
+// `role: "system"` message carrying `tool_addition` / `tool_removal` blocks, and
+// the API resolves every later reference against that running set. Collapsing
+// such a message into a history image erases the change. A `tool_removal` left in
+// the live tail then names a tool the API never saw added, and the whole request
+// is refused with a 400 (`tool_reference_unresolved`); a tool added and still in
+// use stops existing for the model. The net change of the collapsed range is
+// therefore carried into the output as native blocks.
+
+interface ToolChangeBlock {
+  type: 'tool_addition' | 'tool_removal';
+  tool?: { name?: unknown; definition?: { name?: unknown } };
+  cache_control?: CacheControl;
+}
+
+function asToolChange(block: unknown): ToolChangeBlock | undefined {
+  if (!block || typeof block !== 'object') return undefined;
+  const type = (block as { type?: unknown }).type;
+  return type === 'tool_addition' || type === 'tool_removal'
+    ? (block as ToolChangeBlock)
+    : undefined;
+}
+
+function toolChangeName(block: ToolChangeBlock): string | undefined {
+  const name = block.tool?.definition?.name ?? block.tool?.name;
+  return typeof name === 'string' ? name : undefined;
+}
+
+/** Tool changes in `[fromInclusive, upToExclusive)` reduced to their net effect,
+ *  in order. Per tool, the last change is kept only when it leaves the tool in a
+ *  different state than the range found it in, so a tool added and removed inside
+ *  the range (or removed and added back) nets to nothing. Client cache
+ *  breakpoints are not carried: the blocks move, the breakpoints would not mean
+ *  the same thing in their new place. */
+function netToolChanges(
+  messages: Message[],
+  fromInclusive: number,
+  upToExclusive: number,
+): ToolChangeBlock[] {
+  const changes: Array<{ key: string; block: ToolChangeBlock }> = [];
+  for (let i = fromInclusive; i < upToExclusive; i++) {
+    const content = messages[i]?.content;
+    if (!Array.isArray(content)) continue;
+    for (const raw of content) {
+      const block = asToolChange(raw);
+      // A change with no readable name cannot be paired with its inverse, so it
+      // gets a key of its own and is always carried.
+      if (block) changes.push({ key: toolChangeName(block) ?? `\0${changes.length}`, block });
+    }
+  }
+  const firstType = new Map<string, ToolChangeBlock['type']>();
+  const lastIndex = new Map<string, number>();
+  changes.forEach(({ key, block }, i) => {
+    if (!firstType.has(key)) firstType.set(key, block.type);
+    lastIndex.set(key, i);
+  });
+  return changes
+    .filter(({ key, block }, i) => lastIndex.get(key) === i && firstType.get(key) === block.type)
+    .map(({ block }) => {
+      const carried = { ...block };
+      delete carried.cache_control;
+      return carried;
+    });
+}
+
+/** Text block that opens the carried changes, in the wording Claude Code itself
+ *  uses for these announcements. */
+function toolChangeNotice(changes: ToolChangeBlock[]): TextBlock {
+  const names = (type: ToolChangeBlock['type']): string[] =>
+    changes
+      .filter((c) => c.type === type)
+      .map(toolChangeName)
+      .filter((n): n is string => n !== undefined);
+  const added = names('tool_addition');
+  const removed = names('tool_removal');
+  const parts: string[] = [];
+  if (added.length > 0) {
+    parts.push(
+      `The following tools just became available and are ready to use:\n${added.join('\n')}`,
+    );
+  }
+  if (removed.length > 0) {
+    parts.push(
+      `The following tools are no longer available. Do not call them:\n${removed.join('\n')}`,
+    );
+  }
+  return {
+    type: 'text',
+    text: parts.join('\n\n') || 'Tool availability changed earlier in this conversation.',
+  };
+}
+
+/** Put the carried changes back in front of the live tail.
+ *
+ *  Placement follows what the API is known to accept: in captured Claude Code
+ *  traffic every system message directly follows a user turn and none follows
+ *  another system message. The changes therefore go after the tail's leading
+ *  user turns, which cannot depend on them, and fold into a system message
+ *  already standing there instead of sitting next to it. */
+function carryToolChanges(tail: Message[], carried: ToolChangeBlock[]): Message[] {
+  if (carried.length === 0) return tail;
+  let at = 0;
+  while (at < tail.length && tail[at]!.role === 'user') at++;
+  const target = tail[at];
+  if (target === undefined || (target.role as string) !== 'system') {
+    const message = { role: 'system', content: [toolChangeNotice(carried), ...carried] };
+    return [...tail.slice(0, at), message as unknown as Message, ...tail.slice(at)];
+  }
+
+  const own: unknown[] =
+    typeof target.content === 'string'
+      ? target.content === ''
+        ? []
+        : [{ type: 'text', text: target.content }]
+      : [...target.content];
+  const kept: ToolChangeBlock[] = [];
+  for (const change of carried) {
+    const name = toolChangeName(change);
+    const idx =
+      name === undefined
+        ? -1
+        : own.findIndex((b) => {
+            const c = asToolChange(b);
+            return c !== undefined && toolChangeName(c) === name;
+          });
+    const opposite = idx > 0 ? asToolChange(own[idx]) : undefined;
+    if (opposite === undefined || opposite.type === change.type) {
+      kept.push(change);
+      continue;
+    }
+    // This message undoes the carried change (typically: added in the collapsed
+    // history, removed here). Neither block is sent, so the API never hears of
+    // the tool and no single message both adds and removes it. A client cache
+    // breakpoint on the dropped block moves to the block before it.
+    const before = own[idx - 1] as { cache_control?: CacheControl };
+    if (opposite.cache_control !== undefined && before.cache_control === undefined) {
+      own[idx - 1] = { ...before, cache_control: opposite.cache_control };
+    }
+    own.splice(idx, 1);
+  }
+  const firstChange = own.findIndex((b) => asToolChange(b) !== undefined);
+  const insertAt = firstChange < 0 ? own.length : firstChange;
+  const content = [
+    ...own.slice(0, insertAt),
+    ...(kept.length > 0 ? [toolChangeNotice(kept), ...kept] : []),
+    ...own.slice(insertAt),
+  ];
+  return [
+    ...tail.slice(0, at),
+    { ...target, content } as unknown as Message,
+    ...tail.slice(at + 1),
+  ];
+}
+
 export async function collapseHistory(
   messages: Message[],
   isProfitable: ProfitableFn,
@@ -937,6 +1096,15 @@ export async function collapseHistory(
       info.droppedCodepoints.set(cp, (info.droppedCodepoints.get(cp) ?? 0) + n);
     }
   };
+  // Phase 1 (sync): serialize every chunk. Phase 2: render with a small
+  // lookahead so the next chunks rasterize/compress while the current one is
+  // assembled; blocks are still appended strictly in chunk order.
+  type PreparedChunk = {
+    chunkEnd: number;
+    userFrom: number;
+    render?: () => Promise<RenderedImage[]>;
+  };
+  const prepared: PreparedChunk[] = [];
   let chunkStart = protectedPrefix;
   for (const chunkEnd of sortedEnds) {
     // messagesToHistorySegments already omits the user's typed words; userTurnBlocks
@@ -947,7 +1115,7 @@ export async function collapseHistory(
     if (!seg.text || seg.text.length === 0) {
       // Transcript empty (e.g. the chunk was nothing but user prompts) — the
       // prompts themselves still belong in the output.
-      blocks.push(...(await userTurnBlocks(messages, userFrom, chunkEnd, countImage)));
+      prepared.push({ chunkEnd, userFrom });
       continue;
     }
     // Reflow the text and its parallel slot string in lockstep so role attribution
@@ -977,14 +1145,38 @@ export async function collapseHistory(
     // colorByRole tints the structural <role> tags so turn boundaries are scannable
     // in the history image; it's token-free (vision cost is by pixel dims, not PNG
     // byte depth) and carries the serialize-time slot string instead of re-parsing.
-    const imgs = await renderTextToPngsWithCharLimit(
-      chunkRender,
-      o.cols,
-      DENSE_CONTENT_CHARS_PER_IMAGE,
-      { ...o.style, colorByRole: true },
-      o.maxHeightPx,
-      chunkSlot,
-    );
+    const renderText = chunkRender;
+    const renderSlot = chunkSlot;
+    prepared.push({
+      chunkEnd,
+      userFrom,
+      render: () => renderTextToPngsWithCharLimit(
+        renderText,
+        o.cols,
+        DENSE_CONTENT_CHARS_PER_IMAGE,
+        { ...o.style, colorByRole: true },
+        o.maxHeightPx,
+        renderSlot,
+      ),
+    });
+  }
+  const pending = new Map<number, Promise<RenderedImage[]>>();
+  const startRender = (j: number): void => {
+    const p = prepared[j];
+    if (!p?.render || pending.has(j)) return;
+    const promise = p.render();
+    promise.catch(() => {}); // surfaced when awaited in order below
+    pending.set(j, promise);
+  };
+  for (let j = 0; j < prepared.length; j++) {
+    for (let a = j; a <= j + HISTORY_RENDER_LOOKAHEAD; a++) startRender(a);
+    const { chunkEnd, userFrom, render } = prepared[j]!;
+    if (!render) {
+      blocks.push(...(await userTurnBlocks(messages, userFrom, chunkEnd, countImage)));
+      continue;
+    }
+    const imgs = await pending.get(j)!;
+    pending.delete(j);
     const markerCC = markerByEnd.get(chunkEnd);
     for (let k = 0; k < imgs.length; k++) {
       const img = imgs[k]!;
@@ -993,7 +1185,7 @@ export async function collapseHistory(
         source: {
           type: 'base64',
           media_type: 'image/png',
-          data: bytesToBase64(img.png),
+          data: renderedPngBase64(img.png),
         },
       };
       // Mark the LAST image of a marked segment — the caller's breakpoint anchor.
@@ -1029,7 +1221,10 @@ export async function collapseHistory(
   // Demote stale request text in the protected head so the session's opening turn
   // can't surface as clean native text ahead of the history image and read as live.
   const head = demoteProtectedHeadText(messages.slice(0, protectedPrefix));
-  const tail = messages.slice(collapseLen);
+  const tail = carryToolChanges(
+    messages.slice(collapseLen),
+    netToolChanges(messages, protectedPrefix, collapseLen),
+  );
   info.collapsedTurns = collapseLen - protectedPrefix;
   info.collapsedChars = text.length;
   info.collapsedImages = imageCount;

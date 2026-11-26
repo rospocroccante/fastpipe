@@ -86,7 +86,7 @@ export function deriveBaselineWarmth(
   ttlSec: number = CACHE_TTL_SEC,
   prefixSha?: string,
   toolsSha?: string,
-  opts?: { pxPrefixSha?: string; model?: string },
+  opts?: { pxPrefixSha?: string; model?: string; cacheCreateTokens?: number },
 ): { warm: boolean; prevCacheable: number } {
   const age = prev !== undefined ? nowSec - prev.ts : Number.POSITIVE_INFINITY;
   const samePrefix = prev === undefined
@@ -128,7 +128,20 @@ export function deriveBaselineWarmth(
   // split; without one, assume full reuse (conservative for savings).
   // (Unchanged from 0.15.0: tools hash does not gate the split.)
   const freshPrior = fresh && samePrefix;
-  return { warm: true, prevCacheable: freshPrior ? prev!.cacheable : cacheable };
+  if (freshPrior) return { warm: true, prevCacheable: prev!.cacheable };
+  // No usable prior: this is a session's first observed turn riding a prefix
+  // another session warmed. Text would NOT have read the whole prefix: the
+  // session-specific part (hook output, per-session paths) is new to the cache
+  // on either path. The imaged request's own cache write is that part (it stays
+  // text in both), so count it as growth instead of assuming full reuse, which
+  // priced a 15k-token write as a 1.5k read and reported a phantom loss.
+  const created = opts?.cacheCreateTokens;
+  // Only for a session never seen before; a stale or in-flight prior keeps the
+  // old full-reuse assumption (its write may be an image-side bust, not growth).
+  const grown = prev === undefined && typeof created === 'number' && created > 0
+    ? Math.min(created, cacheable)
+    : 0;
+  return { warm: true, prevCacheable: cacheable - grown };
 }
 
 /**

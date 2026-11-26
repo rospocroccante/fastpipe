@@ -77,7 +77,7 @@ import {
   ATLAS_GRAY_WIDE_FLAGS as JBM14_GRAY_WIDE_FLAGS,
   atlasGrayRank as jbMono14GrayRank,
 } from './atlas-gray-jbmono14.js';
-import { encodeGrayPng, encodeRgbPng } from './png.js';
+import { encodeGrayPng, encodeIndexedPng, encodeRgbPng } from './png.js';
 
 export type RenderFont = 'spleen-5x8' | 'jetbrains-mono-10' | 'jetbrains-mono-12' | 'jetbrains-mono-14';
 export const DEFAULT_RENDER_FONT: RenderFont = 'spleen-5x8';
@@ -1078,7 +1078,7 @@ export async function renderChunkToPng(
         rgb[i * 3 + 2] = g;
       }
     }
-    png = await encodeRgbPng(rgb, width, height);
+    png = (await encodeIndexedPng(rgb, width, height, 3)) ?? (await encodeRgbPng(rgb, width, height));
   } else if (markerMask) {
     // markerRed: ↵ pixels → red, everything else stays greyscale.
     const rgb = new Uint8Array(width * height * 3);
@@ -1094,9 +1094,9 @@ export async function renderChunkToPng(
         rgb[i * 3 + 2] = g;
       }
     }
-    png = await encodeRgbPng(rgb, width, height);
+    png = (await encodeIndexedPng(rgb, width, height, 3)) ?? (await encodeRgbPng(rgb, width, height));
   } else {
-    png = await encodeGrayPng(fb, width, height);
+    png = (await encodeIndexedPng(fb, width, height, 1)) ?? (await encodeGrayPng(fb, width, height));
   }
   return { png, width, height, charsRendered, droppedChars, droppedCodepoints };
 }
@@ -1394,6 +1394,12 @@ async function renderTextToPngsUncached(
   // the slab budget (READABLE_CHARS_PER_IMAGE) keeps its shorter row cap.
   const linesPerImg = Math.min(hardLinesPerImg, Math.max(1, Math.floor(maxCharsPerImage / cols)));
 
+  // Pages are independent. Rasterizing is synchronous, but deflate runs off the
+  // main thread (CompressionStream), so keeping a few pages in flight overlaps
+  // the next page's raster with the previous page's compression instead of
+  // idling on each one. The window bounds peak memory (each in-flight page holds
+  // its framebuffers); output order is the page order regardless of completion.
+  const inflight: Promise<RenderedImage>[] = [];
   const images: RenderedImage[] = [];
   let slotCursor = 0;
   for (const page of splitWrappedLinesIntoReadablePages(lines, linesPerImg, maxCharsPerImage)) {
@@ -1402,10 +1408,15 @@ async function renderTextToPngsUncached(
       ? slotLines.slice(slotCursor, slotCursor + page.length).join('\n')
       : undefined;
     slotCursor += page.length;
-    images.push(await renderChunkToPng(chunk, cols, style, maxHeightPx, slotChunk, true));
+    if (inflight.length >= PAGE_ENCODE_CONCURRENCY) images.push(await inflight.shift()!);
+    inflight.push(renderChunkToPng(chunk, cols, style, maxHeightPx, slotChunk, true));
   }
+  for (const p of inflight) images.push(await p);
   return images;
 }
+
+/** Pages rasterized/compressed concurrently within one render call. */
+const PAGE_ENCODE_CONCURRENCY = 6;
 
 export async function renderTextToPngs(
   text: string,

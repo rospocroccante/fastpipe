@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createServer, type Server } from 'node:http';
+import { createServer, request as httpRequest, type Server } from 'node:http';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -96,7 +96,7 @@ async function startNode(extraEnv: Record<string, string> = {}): Promise<{
   await new Promise<void>((resolve, reject) => {
     const deadline = setTimeout(() => reject(new Error(output.join(''))), 10_000);
     const poll = () => {
-      if (output.join('').includes('[pxpipe] listening on')) {
+      if (output.join('').includes('[fastpipe] listening on')) {
         clearTimeout(deadline);
         resolve();
         return;
@@ -197,5 +197,81 @@ describe('Node dashboard security', () => {
     expect(files.length).toBeGreaterThan(0);
     expectMode(path.join(dumpDir, files[0]!), 0o600);
     fs.rmSync(dumpDir, { recursive: true, force: true });
+  });
+});
+
+describe('Node request body limit', () => {
+  const headers = { 'content-type': 'application/json', 'x-api-key': 'test' };
+
+  /** A Messages request padded with one oversized base64 block. The model is
+   *  outside PXPIPE_MODELS, so the proxy forwards it untransformed and the only
+   *  thing under test is the inbound ceiling. */
+  function paddedRequest(padBytes: number): string {
+    return JSON.stringify({
+      model: 'claude-haiku-5-5',
+      max_tokens: 1,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'hi' },
+            {
+              type: 'image',
+              source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(padBytes) },
+            },
+          ],
+        },
+      ],
+    });
+  }
+
+  /** Status the host answers to a declared body size. The limit is enforced on
+   *  the declared length before any byte is read, so no body needs to be sent. */
+  function statusForDeclaredLength(base: string, declaredBytes: number): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const req = httpRequest(
+        `${base}/v1/messages`,
+        { method: 'POST', headers: { ...headers, 'content-length': String(declaredBytes) } },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+          req.destroy();
+        },
+      );
+      req.on('error', reject);
+      req.flushHeaders();
+    });
+  }
+
+  it('forwards a request above 16 MiB by default', async () => {
+    const { base } = await startNode();
+    const res = await fetch(`${base}/v1/messages`, {
+      method: 'POST',
+      headers,
+      body: paddedRequest(17 << 20),
+    });
+    await res.arrayBuffer();
+    expect(res.status).toBe(200);
+  });
+
+  it('still refuses a request above the 32 MiB the Messages API accepts', async () => {
+    const { base } = await startNode();
+    expect(await statusForDeclaredLength(base, (32 << 20) + 1)).toBe(413);
+  });
+});
+
+describe('Node liveness probe', () => {
+  // On Windows and on Linux without systemd nothing supervises the proxy, so
+  // `fastpipe off` has to stop it by pid. A pid file can outlive its process and
+  // name an unrelated one; the proxy answering on its own port cannot.
+  it('reports the pid of the proxy process', async () => {
+    const { base } = await startNode();
+    const res = await fetch(`${base}/api/compression`);
+    const body = (await res.json()) as { compression_enabled: boolean; pid: number };
+    expect(body.compression_enabled).toBe(true);
+    expect(Number.isInteger(body.pid)).toBe(true);
+    expect(body.pid).not.toBe(process.pid);
+    // Signal 0 sends nothing: it only checks that the process exists.
+    expect(() => process.kill(body.pid, 0)).not.toThrow();
   });
 });

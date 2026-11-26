@@ -116,6 +116,8 @@ export interface ProxyEvent {
    *  "length", "content_filter", …) is normalized into the same field. */
   stopReason?: string;
   error?: string;
+  /** True when the first upstream attempt failed at connection level and was retried once. */
+  upstreamRetried?: boolean;
   /** First ~2 KiB of the upstream 4xx body (not captured on 2xx or 5xx). */
   errorBody?: string;
   /** sha256[0..8] of the transformed outgoing body — set on every /v1/messages POST for correlation. */
@@ -134,6 +136,56 @@ export interface ProxyEvent {
 
 /** Max chars of 4xx error body captured on ProxyEvent — enough for Anthropic's full error JSON. */
 const ERROR_BODY_MAX = 2048;
+/** Pause before the single retry of a connection-level upstream failure. */
+const UPSTREAM_RETRY_DELAY_MS = 250;
+/** Low-level codes that mean the request never got a response, so replaying it is safe. */
+const RETRYABLE_FETCH_CODES = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'EPIPE',
+  'ETIMEDOUT',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'UND_ERR_SOCKET',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_CLOSED',
+]);
+
+/** Walks the `cause` chain of a fetch rejection and returns the first error code found. */
+function fetchErrorCode(e: unknown): string | undefined {
+  let cur: unknown = e;
+  for (let i = 0; i < 5 && cur && typeof cur === 'object'; i++) {
+    const code = (cur as { code?: unknown }).code;
+    if (typeof code === 'string') return code;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+/** "fetch failed" alone says nothing; append the underlying cause so events.jsonl is diagnosable. */
+export function describeFetchError(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  const cause = e instanceof Error ? (e as { cause?: unknown }).cause : undefined;
+  if (!cause) return msg;
+  const code = fetchErrorCode(cause);
+  const causeMsg = cause instanceof Error ? cause.message : String(cause);
+  const detail = code && !causeMsg.includes(code) ? `${code} ${causeMsg}` : causeMsg;
+  return detail && detail !== msg ? `${msg} (${detail})` : msg;
+}
+
+/** True when a fetch rejection is a transport failure before any response, and the body can be resent. */
+export function isRetryableFetchFailure(e: unknown, body: unknown): boolean {
+  if (body instanceof ReadableStream) return false;
+  if (!(e instanceof Error)) return false;
+  if (e.message.startsWith('pxpipe:')) return false; // our own timeouts / aborts
+  if (e.name === 'AbortError') return false;
+  const code = fetchErrorCode(e);
+  if (code) return RETRYABLE_FETCH_CODES.has(code);
+  // undici reports socket-level failures as TypeError('fetch failed') with a cause.
+  return e instanceof TypeError && e.message === 'fetch failed';
+}
 
 /** Disabled by default (0): upstream and client control request/stream timeouts. */
 const DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS = 0;
@@ -1518,6 +1570,8 @@ let responseContentType: string | undefined;
     let reqBodySha256: string | undefined;
     // Set once the transform returns; read by fire() at event time.
     let transformMs: number | undefined;
+    // Set when a connection-level upstream failure was retried; read by fire().
+    let upstreamRetried = false;
 
     const fire = (
       status: number,
@@ -1600,6 +1654,7 @@ let responseContentType: string | undefined;
           durationMs: Date.now() - t0,
           firstByteMs,
           transformMs,
+          ...(upstreamRetried ? { upstreamRetried: true } : {}),
           info,
           usage: eventUsage,
           error,
@@ -2078,23 +2133,40 @@ let responseContentType: string | undefined;
 
     let upstreamRes: Response;
     try {
-      const upstreamFetch = fetch(upstreamUrl, {
-        method: req.method,
-        headers: outHeaders,
-        body: bodyOut,
-        signal: upstreamAbort.signal,
-        // duplex is required by spec when sending a stream as body
-        ...(bodyOut instanceof ReadableStream ? { duplex: 'half' } : {}),
-      } as RequestInit);
-      const raced =
-        headersTimeoutMs > 0 ? await Promise.race([upstreamFetch, headersDeadline]) : await upstreamFetch;
-      clearHeadersTimer();
-      if (raced === HEADERS_TIMEOUT) {
-        // Abandoned: keep its eventual rejection from surfacing as unhandled.
-        void upstreamFetch.catch(() => undefined);
-        throw new Error('pxpipe: upstream headers timeout');
+      const fetchOnce = async (): Promise<Response> => {
+        const upstreamFetch = fetch(upstreamUrl, {
+          method: req.method,
+          headers: outHeaders,
+          body: bodyOut,
+          signal: upstreamAbort.signal,
+          // duplex is required by spec when sending a stream as body
+          ...(bodyOut instanceof ReadableStream ? { duplex: 'half' } : {}),
+        } as RequestInit);
+        const raced =
+          headersTimeoutMs > 0 ? await Promise.race([upstreamFetch, headersDeadline]) : await upstreamFetch;
+        if (raced === HEADERS_TIMEOUT) {
+          // Abandoned: keep its eventual rejection from surfacing as unhandled.
+          void upstreamFetch.catch(() => undefined);
+          throw new Error('pxpipe: upstream headers timeout');
+        }
+        return raced;
+      };
+      try {
+        upstreamRes = await fetchOnce();
+      } catch (first) {
+        // A connection-level failure before any response headers (stale keep-alive
+        // socket, reset, brief network blip) gets one more attempt on a fresh
+        // connection. Only buffered bodies can be replayed; streams are already
+        // consumed. Timeouts and client disconnects abort the shared controller,
+        // so they never reach the retry.
+        if (!isRetryableFetchFailure(first, bodyOut) || upstreamAbort.signal.aborted) throw first;
+        upstreamRetried = true;
+        console.warn(`[fastpipe] upstream ${describeFetchError(first)}, retrying once`);
+        await new Promise((r) => setTimeout(r, UPSTREAM_RETRY_DELAY_MS));
+        if (upstreamAbort.signal.aborted) throw first;
+        upstreamRes = await fetchOnce();
       }
-      upstreamRes = raced;
+      clearHeadersTimer();
       // Watch the raw upstream stream, before any bridge re-encodes it.
       upstreamRes = withIdleTimeout(upstreamRes, headersTimeoutMs, idleTimeoutMs, () => {
         timeoutKind = 'idle';
@@ -2118,7 +2190,7 @@ let responseContentType: string | undefined;
           headers: { 'content-type': 'application/json' },
         });
       }
-      fire(502, info, `upstream_error: ${(e as Error).message}`);
+      fire(502, info, `upstream_error: ${describeFetchError(e)}${upstreamRetried ? ' (after 1 retry)' : ''}`);
       return new Response(JSON.stringify({ error: 'pxpipe upstream unreachable' }), {
         status: 502,
         headers: { 'content-type': 'application/json' },

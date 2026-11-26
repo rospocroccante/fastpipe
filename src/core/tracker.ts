@@ -191,6 +191,8 @@ export interface TrackEvent {
 
   // Errors:
   error?: string;
+  /** First upstream attempt failed at connection level and was retried once. */
+  upstream_retried?: boolean;
   /** First ~2 KiB of the upstream 4xx response body. */
   error_body?: string;
   /** sha256[0..8] of the TRANSFORMED outgoing body — correlates payloads without persisting them. */
@@ -228,6 +230,7 @@ export function toTrackEvent(ev: ProxyEvent): TrackEvent {
   if (ev.firstByteMs !== undefined) out.first_byte_ms = ev.firstByteMs;
   if (ev.transformMs !== undefined) out.transform_ms = ev.transformMs;
   if (ev.error) out.error = ev.error;
+  if (ev.upstreamRetried) out.upstream_retried = true;
   if (ev.errorBody) out.error_body = ev.errorBody;
   if (ev.reqBodySha8) out.req_body_sha8 = ev.reqBodySha8;
   // Body sample: sidecar path (Node) > inline base64 if it fits > drop (Workers, oversized).

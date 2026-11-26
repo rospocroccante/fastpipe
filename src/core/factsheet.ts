@@ -281,12 +281,44 @@ export function factSheetText(text: string, format: FactSheetFormat = 'full', co
   return prepareFactSheet(text, format)(coveredText);
 }
 
+/**
+ * Entry extraction is a pure function of the text, and the proxy sees the same
+ * frozen history/slab text on every turn, so the regex scan (the single largest
+ * CPU cost of a warm request) is memoized. Bounded by retained text length;
+ * eviction is LRU via Map insertion order. Below a small size the scan is cheaper
+ * than hashing the key, so short texts skip the cache.
+ */
+const ENTRY_CACHE_MAX_CHARS = 16 * 1024 * 1024;
+const ENTRY_CACHE_MIN_TEXT = 2048;
+const entryCache = new Map<string, readonly FactSheetEntry[]>();
+let entryCacheChars = 0;
+
+function cachedEntries(text: string): readonly FactSheetEntry[] {
+  const compute = () => text.length <= MAX_SCAN
+    ? extractFactSheetEntries(text)
+    : extractFactSheetEntriesAllPages(text, FACTSHEET_PAGE_CHARS).kept;
+  if (text.length < ENTRY_CACHE_MIN_TEXT || text.length > ENTRY_CACHE_MAX_CHARS / 4) return compute();
+  const hit = entryCache.get(text);
+  if (hit) {
+    entryCache.delete(text);
+    entryCache.set(text, hit);
+    return hit;
+  }
+  const entries = Object.freeze(compute());
+  entryCache.set(text, entries);
+  entryCacheChars += text.length;
+  for (const [k] of entryCache) {
+    if (entryCacheChars <= ENTRY_CACHE_MAX_CHARS) break;
+    entryCache.delete(k);
+    entryCacheChars -= k.length;
+  }
+  return entries;
+}
+
 /** Extract once; coverage remains an emission-time input, never cached state. */
 export function prepareFactSheet(text: string, format: FactSheetFormat = 'full'): (coveredText?: string | ReadonlySet<string>) => string {
   if (!text) return () => '';
-  const entries = text.length <= MAX_SCAN
-    ? extractFactSheetEntries(text)
-    : extractFactSheetEntriesAllPages(text, FACTSHEET_PAGE_CHARS).kept;
+  const entries = cachedEntries(text);
   const full = factSheetTextFromEntries(entries, format);
   return (coveredText) => {
     if (coveredText === undefined || (typeof coveredText === 'string' ? coveredText.length === 0 : coveredText.size === 0)) return full;

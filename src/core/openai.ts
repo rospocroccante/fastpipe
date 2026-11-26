@@ -23,7 +23,7 @@ import {
   type GptModelProfile,
   type GptVisionCost,
 } from './gpt-model-profiles.js';
-import { bytesToBase64 } from './png.js';
+import { renderedPngBase64 } from './png.js';
 import {
   compactSlabWhitespace,
   countVisualRows,
@@ -602,7 +602,7 @@ function openAIImagePart(img: RenderedImage, model?: string): OpenAIImagePart {
   return {
     type: 'image_url',
     image_url: {
-      url: `data:image/png;base64,${bytesToBase64(img.png)}`,
+      url: `data:image/png;base64,${renderedPngBase64(img.png)}`,
       detail: openAIImageDetail(model),
     },
   };
@@ -612,7 +612,7 @@ function openAIImagePart(img: RenderedImage, model?: string): OpenAIImagePart {
 function responsesImagePart(img: RenderedImage, model?: string): ResponsesInputImagePart {
   return {
     type: 'input_image',
-    image_url: `data:image/png;base64,${bytesToBase64(img.png)}`,
+    image_url: `data:image/png;base64,${renderedPngBase64(img.png)}`,
     detail: openAIImageDetail(model),
   };
 }
@@ -965,7 +965,7 @@ async function applyChatHistoryCollapse(
   ];
   info.nativeInjectedTokens = (info.nativeInjectedTokens ?? 0)
     + gptTextTokens(intro + histFactSheet + outro + guard);
-  info.historyImageSha = await sha8(allImages.map((i) => bytesToBase64(i.png)).join(''));
+  info.historyImageSha = await sha8(allImages.map((i) => renderedPngBase64(i.png)).join(''));
   return true;
 }
 
@@ -1074,7 +1074,7 @@ async function applyResponsesHistoryCollapse(
   }
   req.input = rewritten;
   info.historyImageSha = await sha8(
-    plan.images.map((image) => bytesToBase64(image.png)).join(''),
+    plan.images.map((image) => renderedPngBase64(image.png)).join(''),
   );
   return true;
 }

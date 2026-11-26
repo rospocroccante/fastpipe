@@ -2469,15 +2469,32 @@ describe('colorByRole (structure-through slot string)', () => {
     expect(ROLE_PALETTE[0]).not.toEqual(ROLE_PALETTE[1]);
   });
 
-  it('emits RGB truecolor PNG when slot coloring is on, grayscale when off', async () => {
+  it('emits colour pixels when slot coloring is on, only greys when off', async () => {
     const text = '<user>\nhello user\n</user>\n\n<assistant>\nhello model\n</assistant>';
     const slot =
       `${roleSlotSegment('user', 'hello user', SLOT_MARK_USER)}\n\n` +
       `${roleSlotSegment('assistant', 'hello model', SLOT_MARK_ASSISTANT)}`;
     const colored = await renderChunkToPng(text, 40, { colorByRole: true }, undefined, slot);
     const plain = await renderChunkToPng(text, 40, {});
+    // Few-colour pages are emitted as palette PNGs (colour type 3), so the
+    // colour/grey distinction lives in the PLTE entries, not the IHDR byte.
     // PNG IHDR colorType byte: sig(8) + len(4) + "IHDR"(4) + ihdr[9] = offset 25.
-    expect(colored.png[25]).toBe(2); // 2 = truecolor RGB
-    expect(plain.png[25]).toBe(0); // 0 = grayscale
+    const paletteEntries = (png: Uint8Array): number[][] => {
+      const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
+      for (let off = 8; off < png.length;) {
+        const len = view.getUint32(off);
+        const type = String.fromCharCode(...png.subarray(off + 4, off + 8));
+        if (type === 'PLTE') {
+          const d = png.subarray(off + 8, off + 8 + len);
+          return Array.from({ length: len / 3 }, (_, k) => [d[k * 3]!, d[k * 3 + 1]!, d[k * 3 + 2]!]);
+        }
+        off += 12 + len;
+      }
+      return [];
+    };
+    expect(colored.png[25]).toBe(3);
+    expect(plain.png[25]).toBe(3);
+    expect(paletteEntries(colored.png).some(([r, g, b]) => r !== g || g !== b)).toBe(true);
+    expect(paletteEntries(plain.png).every(([r, g, b]) => r === g && g === b)).toBe(true);
   });
 });

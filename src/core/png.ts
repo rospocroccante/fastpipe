@@ -156,8 +156,156 @@ export async function encodeRgbPng(pixels: Uint8Array, width: number, height: nu
   ]);
 }
 
-/** Base64-encode bytes. Chunks to avoid call-stack blow-up from String.fromCharCode(...bigArray). */
+/** Scanline filter for packed palette rows. None (0) is the default: on dense
+ *  5x8 pages it deflated to 3.29 MB vs 4.24 MB (Up) and 5.35 MB (Average)
+ *  across 55 pages, against 7.84 MB for the previous 8-bit RGB/gray encoding. */
+export type IndexedFilter = 0 | 2 | 3;
+
+/**
+ * Encode a gray (channels=1) or RGB (channels=3) buffer as a palette PNG (colour
+ * type 3) at the smallest bit depth that fits: 1, 2, 4 or 8 bits per pixel.
+ *
+ * Rendered pages hold only paper, ink, a few antialiasing levels and the role
+ * tints, so packing pixels as palette indices cuts the bytes the compressor sees
+ * (and the bytes uploaded every turn) without touching a single pixel: decoders
+ * expand each index back to the exact RGB/gray value it came from. Image tokens
+ * are billed on pixel dimensions, so the bill does not change.
+ *
+ * Returns null when the palette would not shrink the raw scanlines (more than
+ * 256 colours, or a gray image that needs the full 8 bits), so the caller keeps
+ * its direct encoding.
+ */
+export async function encodeIndexedPng(
+  pixels: Uint8Array,
+  width: number,
+  height: number,
+  channels: 1 | 3,
+  filter: IndexedFilter = 0,
+): Promise<Uint8Array | null> {
+  const n = width * height;
+  if (pixels.length !== n * channels) {
+    throw new Error(`encodeIndexedPng: pixels.length=${pixels.length} != ${width}×${height}×${channels}`);
+  }
+
+  // Palette discovery. Glyph pages are long runs of one colour, so checking the
+  // previous pixel first skips the map lookup for nearly every pixel.
+  const index = new Uint8Array(n);
+  const slot = new Map<number, number>();
+  const colours: number[] = [];
+  let lastKey = -1;
+  let lastIdx = 0;
+  for (let i = 0; i < n; i++) {
+    const key = channels === 3
+      ? (pixels[i * 3]! << 16) | (pixels[i * 3 + 1]! << 8) | pixels[i * 3 + 2]!
+      : pixels[i]!;
+    if (key !== lastKey) {
+      let idx = slot.get(key);
+      if (idx === undefined) {
+        if (colours.length === 256) return null;
+        idx = colours.length;
+        slot.set(key, idx);
+        colours.push(key);
+      }
+      lastKey = key;
+      lastIdx = idx;
+    }
+    index[i] = lastIdx;
+  }
+
+  const count = colours.length;
+  const bits = count <= 2 ? 1 : count <= 4 ? 2 : count <= 16 ? 4 : 8;
+  if (channels === 1 && bits === 8) return null; // same raw size as plain gray
+
+  // Pack indices MSB-first, one filter byte per row.
+  const rowBytes = Math.ceil((width * bits) / 8);
+  const stride = rowBytes + 1;
+  const packed = new Uint8Array(stride * height);
+  const perByte = 8 / bits;
+  for (let y = 0; y < height; y++) {
+    const src = y * width;
+    const dst = y * stride + 1;
+    for (let x = 0; x < width; x++) {
+      const shift = 8 - bits * ((x % perByte) + 1);
+      packed[dst + Math.floor(x / perByte)]! |= index[src + x]! << shift;
+    }
+  }
+  // Filters run on bytes (bpp = 1 for every depth ≤ 8). Iterate bottom-up so
+  // each row is filtered against the ORIGINAL row above it, as decoders expect.
+  if (filter !== 0) {
+    for (let y = height - 1; y >= 0; y--) {
+      const row = y * stride;
+      packed[row] = filter;
+      for (let x = rowBytes; x >= 1; x--) {
+        const up = y > 0 ? packed[row - stride + x]! : 0;
+        if (filter === 2) {
+          packed[row + x] = (packed[row + x]! - up) & 0xff;
+        } else {
+          const left = x > 1 ? packed[row + x - 1]! : 0;
+          packed[row + x] = (packed[row + x]! - ((left + up) >> 1)) & 0xff;
+        }
+      }
+    }
+  }
+
+  const ihdr = new Uint8Array(13);
+  ihdr.set(u32be(width), 0);
+  ihdr.set(u32be(height), 4);
+  ihdr[8] = bits;
+  ihdr[9] = 3; // colour type 3 = palette; compression/filter/interlace stay 0
+
+  const plte = new Uint8Array(count * 3);
+  for (let k = 0; k < count; k++) {
+    const c = colours[k]!;
+    if (channels === 3) {
+      plte[k * 3] = (c >> 16) & 0xff;
+      plte[k * 3 + 1] = (c >> 8) & 0xff;
+      plte[k * 3 + 2] = c & 0xff;
+    } else {
+      plte[k * 3] = plte[k * 3 + 1] = plte[k * 3 + 2] = c;
+    }
+  }
+
+  const compressed = await deflateZlib(packed);
+  return concat([
+    PNG_SIGNATURE,
+    chunk('IHDR', ihdr),
+    chunk('PLTE', plte),
+    chunk('IDAT', compressed),
+    chunk('IEND', new Uint8Array(0)),
+  ]);
+}
+
+type NativeBase64 = { toBase64?: () => string };
+type BufferLike = { from(b: Uint8Array): { toString(enc: 'base64'): string } };
+const NodeBuffer = (globalThis as { Buffer?: BufferLike }).Buffer;
+
+/** Base64-encode bytes. Uses the runtime's native encoder when there is one
+ *  (Uint8Array#toBase64, or Buffer on Node), which is ~10x faster than the
+ *  portable fallback; Workers without either still get the fallback. */
 export function bytesToBase64(bytes: Uint8Array): string {
+  const native = (bytes as NativeBase64).toBase64;
+  if (typeof native === 'function') return native.call(bytes);
+  if (NodeBuffer) return NodeBuffer.from(bytes).toString('base64');
+  return bytesToBase64Portable(bytes);
+}
+
+const renderedBase64 = new WeakMap<Uint8Array, string>();
+
+/** Base64 of a RENDERED page, memoized per PNG buffer. Rendered PNGs are never
+ *  mutated, and the render cache hands back the same buffer every turn, so a
+ *  frozen history page is encoded once instead of on every request. Do not use
+ *  for buffers that may change after the call. */
+export function renderedPngBase64(png: Uint8Array): string {
+  let b64 = renderedBase64.get(png);
+  if (b64 === undefined) {
+    b64 = bytesToBase64(png);
+    renderedBase64.set(png, b64);
+  }
+  return b64;
+}
+
+/** Portable base64. Chunks to avoid call-stack blow-up from String.fromCharCode(...bigArray). */
+export function bytesToBase64Portable(bytes: Uint8Array): string {
   let binary = '';
   const CHUNK = 0x8000;
   for (let i = 0; i < bytes.length; i += CHUNK) {

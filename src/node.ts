@@ -69,15 +69,25 @@ interface RuntimeConfig {
   /** Persist 4xx request and upstream error bodies for debugging. Off unless
    *  PXPIPE_DEBUG_CAPTURE_4XX=1. */
   captureErrorReqBody: boolean;
-  /** Ceiling on a buffered inbound request body. Unset leaves the core default
-   *  (16 MiB). Raise it only if a real client needs more; the default binding is
-   *  loopback, but HOST can expose this process to a network. */
+  /** Ceiling on a buffered inbound request body. Unset uses
+   *  NODE_DEFAULT_MAX_REQUEST_BYTES (32 MiB). The default binding is loopback,
+   *  but HOST can expose this process to a network. */
   maxRequestBytes?: number;
 }
 
-const DEFAULT_CONFIG_FILE = path.join(os.homedir(), '.config', 'pxpipe', 'config.json');
-const DEFAULT_EVENTS_FILE = path.join(os.homedir(), '.pxpipe', 'events.jsonl');
-const DEFAULT_SESSION_STATE_FILE = path.join(os.homedir(), '.pxpipe', 'session-state.json');
+/** Inbound ceiling for this host when PXPIPE_MAX_REQUEST_BYTES is unset: 32 MiB,
+ *  the request size the Anthropic Messages API documents as its own limit.
+ *
+ *  The core default (16 MiB) is sized for a Worker isolate. On a local machine
+ *  it turned away real Claude Code requests the API would have taken: 19 in two
+ *  weeks of use, every one between 16.0 and 16.8 MiB. Anything larger than this
+ *  is refused upstream anyway, so the ceiling still bounds what a client can
+ *  make the process allocate. */
+const NODE_DEFAULT_MAX_REQUEST_BYTES = 32 << 20;
+
+const DEFAULT_CONFIG_FILE = path.join(os.homedir(), '.config', 'fastpipe', 'config.json');
+const DEFAULT_EVENTS_FILE = path.join(os.homedir(), '.fastpipe', 'events.jsonl');
+const DEFAULT_SESSION_STATE_FILE = path.join(os.homedir(), '.fastpipe', 'session-state.json');
 
 /** PXPIPE_SESSION_STATE: a path, or 0/off/false/no to disable. */
 function resolveSessionStateFile(): string | undefined {
@@ -140,7 +150,7 @@ function applyConfigFileDefaults(): void {
   try {
     parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
   } catch (e) {
-    console.warn(`[pxpipe] ignored invalid config ${file}: ${(e as Error).message}`);
+    console.warn(`[fastpipe] ignored invalid config ${file}: ${(e as Error).message}`);
     return;
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
@@ -165,13 +175,13 @@ function persistModelBasesToConfig(bases: readonly string[]): void {
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      console.warn(`[pxpipe] could not persist model scope: invalid config object ${file}`);
+      console.warn(`[fastpipe] could not persist model scope: invalid config object ${file}`);
       return;
     }
     cfg = parsed as Record<string, unknown>;
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.warn(`[pxpipe] could not persist model scope: invalid config ${file}: ${(e as Error).message}`);
+      console.warn(`[fastpipe] could not persist model scope: invalid config ${file}: ${(e as Error).message}`);
       return;
     }
   }
@@ -192,13 +202,13 @@ function persistModelBasesToConfig(bases: readonly string[]): void {
     } catch {
       // The write may have failed before the temporary file was created.
     }
-    console.warn(`[pxpipe] could not persist model scope to ${file}: ${(e as Error).message}`);
+    console.warn(`[fastpipe] could not persist model scope to ${file}: ${(e as Error).message}`);
   }
 }
 
 function parseCli(argv: string[]): RuntimeConfig {
   // Only flags accepted are --help and --version. Anything else is an
-  // error — there is exactly ONE way to run pxpipe and the dashboard
+  // error — there is exactly ONE way to run fastpipe and the dashboard
   // exposes every metric the operator might want to inspect.
   for (const a of argv) {
     if (a === '-h' || a === '--help') {
@@ -210,8 +220,8 @@ function parseCli(argv: string[]): RuntimeConfig {
       process.exit(0);
     }
     if (a.startsWith('-')) {
-      console.error(`[pxpipe] unknown option: ${a}`);
-      console.error(`[pxpipe] this build accepts no flags; run \`pxpipe --help\` for env vars`);
+      console.error(`[fastpipe] unknown option: ${a}`);
+      console.error(`[fastpipe] this build accepts no flags; run \`fastpipe --help\` for env vars`);
       process.exit(2);
     }
   }
@@ -246,20 +256,21 @@ function parseCli(argv: string[]): RuntimeConfig {
     // Off by default: either side of a 4xx may hold prompts or secrets.
     // Opt in for debugging only. (issue #69)
     captureErrorReqBody: process.env.PXPIPE_DEBUG_CAPTURE_4XX === '1',
-    maxRequestBytes: parseMaxRequestBytes(process.env.PXPIPE_MAX_REQUEST_BYTES),
+    maxRequestBytes:
+      parseMaxRequestBytes(process.env.PXPIPE_MAX_REQUEST_BYTES) ?? NODE_DEFAULT_MAX_REQUEST_BYTES,
   };
 }
 
 /** A bad limit exits instead of being ignored. The core also refuses to treat a
  *  broken value as "no limit", but a host that was asked for 8MB and silently ran
- *  at 16 would be a worse answer than a startup error. */
+ *  at the default would be a worse answer than a startup error. */
 function parseMaxRequestBytes(value: string | undefined): number | undefined {
   const raw = value?.trim();
   if (raw === undefined || raw === '') return undefined;
   const bytes = Number(raw);
   if (!Number.isSafeInteger(bytes) || bytes <= 0) {
     console.error(
-      `[pxpipe] PXPIPE_MAX_REQUEST_BYTES must be a positive whole number of bytes, got: ${value}`,
+      `[fastpipe] PXPIPE_MAX_REQUEST_BYTES must be a positive whole number of bytes, got: ${value}`,
     );
     process.exit(2);
   }
@@ -269,17 +280,17 @@ function parseMaxRequestBytes(value: string | undefined): number | undefined {
 function parseProvider(v: string | undefined): 'cloudflare-ai-gateway' | undefined {
   if (v === undefined || v === '') return undefined;
   if (v === 'cloudflare-ai-gateway') return v;
-  console.error(`[pxpipe] unknown PXPIPE_PROVIDER: ${v}`);
+  console.error(`[fastpipe] unknown PXPIPE_PROVIDER: ${v}`);
   process.exit(2);
 }
 
 function printHelp(): void {
-  console.log(`pxpipe — token-saving proxy for Claude Code
+  console.log(`fastpipe — token-saving proxy for Claude Code
 
 Usage:
-  pxpipe                run the proxy (no flags)
-  pxpipe export [...]   render files/diff to PNG pages + cost report (see pxpipe export --help)
-  pxpipe warp [--route PATTERN=TARGET]... -- CMD
+  fastpipe                run the proxy (no flags)
+  fastpipe export [...]   render files/diff to PNG pages + cost report (see fastpipe export --help)
+  fastpipe warp [--route PATTERN=TARGET]... -- CMD
                         run CMD behind the proxy without a custom base URL, so
                         client-side first-party gates (/remote-control,
                         claude.ai connectors) keep working.
@@ -287,7 +298,7 @@ Usage:
                         --route adds rules for agents that talk to another
                         base URL, e.g.
                           --route '127.0.0.1:9090/v1/*=http://127.0.0.1:47821'
-  pxpipe stats [--json] [--file <p>]
+  fastpipe stats [--json] [--file <p>]
                         summarize the events log offline (no server needed),
                         incl. measured savings; defaults to $PXPIPE_LOG
 
@@ -297,7 +308,7 @@ and history; tracks events to disk; and measures real saved_pct via
 
 Live sessions and cleanup tools live in the dashboard at
   http://127.0.0.1:<port>/  (default port 47821)
-For after-the-fact analysis without the server running, use pxpipe stats.
+For after-the-fact analysis without the server running, use fastpipe stats.
 
 Flags:
   -h, --help              show this help
@@ -326,12 +337,12 @@ Environment:
   PXPIPE_MODELS           comma-separated model bases to image (Claude/Gemini/GPT/Grok);
                           default claude-fable-5,gemini (every Gemini; Sol/Opus/GPT-5.5/Grok opt-in);
                           off disables
-  PXPIPE_CONFIG           JSON config path (default ~/.config/pxpipe/config.json)
+  PXPIPE_CONFIG           JSON config path (default ~/.config/fastpipe/config.json)
                           supports {"models": [...]} or {"models": "off"}
-  PXPIPE_LOG              JSONL events path (default ~/.pxpipe/events.jsonl)
+  PXPIPE_LOG              JSONL events path (default ~/.fastpipe/events.jsonl)
   PXPIPE_SESSION_STATE    where per-session cache pins (freeze-step floor, cache
                           liveness) survive a restart; 0/off disables
-                          (default ~/.pxpipe/session-state.json). Without it a
+                          (default ~/.fastpipe/session-state.json). Without it a
                           restart drops every live session's floor.
   PXPIPE_DUMP_DIR         debug: write every rendered PNG here (what the model
                           sees); off unless set. Compress arm only.
@@ -360,6 +371,9 @@ Use with OpenAI-compatible GPT clients:
 // inside its own run-script env, so for `npx pxpipe-proxy` or a global bin it is
 // undefined (or reflects the *consumer's* package), never this tool's version.
 declare const __PXPIPE_VERSION__: string | undefined;
+
+const BUILD_VERSION: string =
+  (typeof __PXPIPE_VERSION__ === 'string' ? __PXPIPE_VERSION__ : undefined) ?? 'dev';
 
 function printVersion(): void {
   const injected = typeof __PXPIPE_VERSION__ === 'string' ? __PXPIPE_VERSION__ : undefined;
@@ -657,6 +671,14 @@ async function dispatchDashboard(
       return dashboard.serveFragment(route.name, url, port);
     }
     case 'api-compression': {
+      // GET is the cheap liveness probe (in-memory, never touches the events file) used by `fastpipe status/on` and the dashboard's offline banner.
+      // The pid lets `fastpipe off` stop this exact process where no service manager tracks it (Windows, Linux without systemd).
+      if (method === 'GET') {
+        return new Response(
+          JSON.stringify({ compression_enabled: dashboard.getCompressionEnabled(), pid: process.pid }),
+          { status: 200, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } },
+        );
+      }
       if (method !== 'POST') {
         return new Response(
           JSON.stringify({ error: 'use POST' }),
@@ -725,7 +747,7 @@ class FileTracker implements Tracker {
     } catch (err) {
       if (!this.brokenLogged) {
         console.error(
-          `[pxpipe] FileTracker disabled — cannot open ${this.filePath}: ${(err as Error).message}`,
+          `[fastpipe] FileTracker disabled — cannot open ${this.filePath}: ${(err as Error).message}`,
         );
         this.brokenLogged = true;
       }
@@ -754,7 +776,8 @@ class FileTracker implements Tracker {
   emit(ev: TrackEvent): void {
     if (!this.ensureOpen()) return;
     try {
-      const line = JSON.stringify(ev) + '\n';
+      // Stamp the build so a week of events can be split by installed version.
+      const line = JSON.stringify({ ...ev, build: BUILD_VERSION }) + '\n';
       const buf = Buffer.from(line, 'utf8');
       fs.writeSync(this.fd!, buf);
       this.bytesWritten += buf.length;
@@ -762,7 +785,7 @@ class FileTracker implements Tracker {
     } catch (err) {
       if (!this.brokenLogged) {
         console.error(
-          `[pxpipe] FileTracker write failed: ${(err as Error).message}`,
+          `[fastpipe] FileTracker write failed: ${(err as Error).message}`,
         );
         this.brokenLogged = true;
       }
@@ -834,13 +857,13 @@ async function maybeWriteBodySidecar(
   }
 }
 
-// ---- pxpipe export -------------------------------------------------------
+// ---- fastpipe export -------------------------------------------------------
 
 function printExportHelp(): void {
-  console.log(`pxpipe export — render code/text to PNG pages for compressed LLM context
+  console.log(`fastpipe export — render code/text to PNG pages for compressed LLM context
 
 Usage:
-  pxpipe export [target ...]    default target is "." (current directory)
+  fastpipe export [target ...]    default target is "." (current directory)
 
 Targets:
   Files or directories to include. Multiple targets are joined with a header
@@ -860,7 +883,7 @@ Options:
   -h, --help         show this help
 
 Output:
-  <out>/pxpipe-export-<hash>/
+  <out>/fastpipe-export-<hash>/
     page-001.png ...  rendered image pages
     factsheet.txt     verbatim precision tokens (paths, SHAs, ids, numbers)
     manifest.json     metadata + token report
@@ -872,12 +895,12 @@ Report columns:
   % saved       (text − image) / text × 100
 
 Examples:
-  pxpipe export .                              # whole directory
-  pxpipe export --include "*.ts" src/          # TypeScript files only
-  pxpipe export --git                          # uncommitted changes
-  pxpipe export --diff HEAD~3                  # last 3 commits
-  pxpipe export --open src/                    # render src/, then reveal the folder
-  cat big-file.txt | pxpipe export --stdin
+  fastpipe export .                              # whole directory
+  fastpipe export --include "*.ts" src/          # TypeScript files only
+  fastpipe export --git                          # uncommitted changes
+  fastpipe export --diff HEAD~3                  # last 3 commits
+  fastpipe export --open src/                    # render src/, then reveal the folder
+  cat big-file.txt | fastpipe export --stdin
 `);
 }
 
@@ -931,7 +954,7 @@ function collectFilesFromTargets(
   for (const target of targets) {
     let st: fs.Stats;
     try { st = fs.statSync(target); } catch {
-      console.warn(`[pxpipe export] skipping inaccessible target: ${target}`);
+      console.warn(`[fastpipe export] skipping inaccessible target: ${target}`);
       continue;
     }
     if (st.isDirectory()) {
@@ -941,7 +964,7 @@ function collectFilesFromTargets(
       const r = readExportTextFile(target, rel, include, exclude);
       if (r.kind === 'ok') files.push({ relPath: rel, content: r.content });
       else if (r.kind !== 'excluded') {
-        console.warn(`[pxpipe export] skipping ${r.kind} file: ${target}`);
+        console.warn(`[fastpipe export] skipping ${r.kind} file: ${target}`);
       }
     }
   }
@@ -972,7 +995,7 @@ async function collectSource(opts: ExportParsed): Promise<[string, string[]]> {
     const cwd = opts.targets.length > 0 ? opts.targets[0]! : process.cwd();
     const diff = gitRun(['diff', opts.diff], cwd);
     if (diff === null) {
-      console.error(`[pxpipe export] git diff ${opts.diff} failed`);
+      console.error(`[fastpipe export] git diff ${opts.diff} failed`);
       process.exit(1);
     }
     return [diff, []];
@@ -997,7 +1020,7 @@ async function collectSource(opts: ExportParsed): Promise<[string, string[]]> {
       const r = readExportTextFile(full, rel, opts.include, opts.exclude);
       if (r.kind === 'ok') untracked += `\n===== ${rel} =====\n` + r.content;
       else if (r.kind !== 'excluded') {
-        console.warn(`[pxpipe export] skipping ${r.kind} untracked file: ${rel}`);
+        console.warn(`[fastpipe export] skipping ${r.kind} untracked file: ${rel}`);
       }
     }
     const sourceText = diff + untracked;
@@ -1008,7 +1031,7 @@ async function collectSource(opts: ExportParsed): Promise<[string, string[]]> {
   const targets = opts.targets.length > 0 ? opts.targets : ['.'];
   const files = collectFilesFromTargets(targets, opts.include, opts.exclude);
   if (files.length === 0) {
-    console.warn('[pxpipe export] no files collected');
+    console.warn('[fastpipe export] no files collected');
   }
   const sourceText = files
     .map((f) => `===== ${f.relPath} =====\n${f.content}`)
@@ -1053,7 +1076,7 @@ function printExportReport(opts: ExportParsed, outDir: string, sourceFiles: stri
     ? ` (${tokenReport.factsheetDropped} dropped)`
     : '';
   console.log(
-    `\npxpipe export\n` +
+    `\nfastpipe export\n` +
     `  out:            ${outDir}\n` +
     `  files:          ${formatNumber(sourceFiles.length)}\n` +
     `  source chars:   ${formatNumber(manifest.sourceChars)}\n` +
@@ -1079,8 +1102,8 @@ async function runExport(argv: string[]): Promise<void> {
     process.exit(0);
   }
   if (parseResult.kind === 'error') {
-    console.error(`[pxpipe export] ${parseResult.message}`);
-    console.error(`[pxpipe export] run \`pxpipe export --help\` for usage`);
+    console.error(`[fastpipe export] ${parseResult.message}`);
+    console.error(`[fastpipe export] run \`fastpipe export --help\` for usage`);
     process.exit(2);
   }
 
@@ -1089,10 +1112,10 @@ async function runExport(argv: string[]): Promise<void> {
   // Collect source text
   const [sourceText, sourceFiles] = await collectSource(opts);
 
-  // Unique output dir: <out>/pxpipe-export-XXXXXX/. mkdtemp guarantees a fresh, random
+  // Unique output dir: <out>/fastpipe-export-XXXXXX/. mkdtemp guarantees a fresh, random
   // directory so concurrent runs never collide and stale page-NNN.png never bleed in.
   fs.mkdirSync(opts.out, { recursive: true });
-  const outDir = fs.mkdtempSync(path.join(opts.out, 'pxpipe-export-'));
+  const outDir = fs.mkdtempSync(path.join(opts.out, 'fastpipe-export-'));
 
   // Run core export
   const result = await runExportCore(sourceText, {
@@ -1129,7 +1152,7 @@ async function main(): Promise<void> {
   }
   if (argv[0] === 'stats') {
     // Offline log analysis — reads the events JSONL without a running proxy.
-    // The live dashboard covers the same data while pxpipe is up.
+    // The live dashboard covers the same data while fastpipe is up.
     const defaultFile = process.env.PXPIPE_LOG ?? DEFAULT_EVENTS_FILE;
     const { code, out, err } = await runStats(argv.slice(1), defaultFile);
     if (out) process.stdout.write(out + '\n');
@@ -1137,7 +1160,7 @@ async function main(): Promise<void> {
     process.exit(code); // server never starts
   }
   // `warp` runs an agent behind a CONNECT proxy and redirects its inference
-  // traffic into the pxpipe already running. It starts no proxy of its own, so
+  // traffic into the fastpipe already running. It starts no proxy of its own, so
   // it exits through its own branch below rather than falling through here.
   let warpCommand: string[] | undefined;
   const warpRoutes: string[] = [];
@@ -1154,7 +1177,7 @@ async function main(): Promise<void> {
       if (a === '--route') {
         const spec = warpArgv[i + 1];
         if (spec === undefined) {
-          console.error('[pxpipe] warp: --route needs PATTERN=TARGET');
+          console.error('[fastpipe] warp: --route needs PATTERN=TARGET');
           process.exit(2);
         }
         warpRoutes.push(spec);
@@ -1174,7 +1197,7 @@ async function main(): Promise<void> {
   const opts = parseCli(cliArgv);
 
   // warp only redirects traffic: it decrypts the agent's TLS and re-points the
-  // inference path at the pxpipe you already have running, so that instance
+  // inference path at the fastpipe you already have running, so that instance
   // does the transforming, the tracking and the dashboard. Everything below —
   // tracker, proxy pipeline, listener — belongs to that instance, not to us.
   if (warpCommand) {
@@ -1183,8 +1206,14 @@ async function main(): Promise<void> {
   }
   // A/B harness passthrough switch (see the `transform` callback below).
   const forcePassthrough = /^(1|true|yes|on)$/i.test(process.env.PXPIPE_DISABLE ?? '');
+  // Runtime pause flag, written and removed by `fastpipe pause` / `fastpipe resume`.
+  const pauseFile = process.env.PXPIPE_PAUSE_FILE?.trim() || path.join(path.dirname(opts.eventsFile), 'paused');
+  const isPaused = (): boolean => fs.existsSync(pauseFile);
+  if (isPaused()) {
+    console.log(`[fastpipe] ${pauseFile} present - paused, passthrough until it is removed`);
+  }
   if (forcePassthrough) {
-    console.log('[pxpipe] PXPIPE_DISABLE set — passthrough mode (compress=false), still logging usage + baselines');
+    console.log('[fastpipe] PXPIPE_DISABLE set — passthrough mode (compress=false), still logging usage + baselines');
   }
   // Subscription bearers expire. A client that froze its bearer at startup — a
   // container handed CLAUDE_CODE_OAUTH_TOKEN as an env var — cannot renew one,
@@ -1210,7 +1239,7 @@ async function main(): Promise<void> {
       }
     : undefined;
   if (authTokenFile) {
-    console.log(`[pxpipe] ANTHROPIC_OAUTH_TOKEN_FILE set — bearer resolved per request from ${authTokenFile}`);
+    console.log(`[fastpipe] ANTHROPIC_OAUTH_TOKEN_FILE set — bearer resolved per request from ${authTokenFile}`);
   }
   // Debug aid: when PXPIPE_DUMP_DIR is set, persist every rendered PNG this
   // process emits, so you can eyeball exactly what the model received (OCR /
@@ -1222,9 +1251,9 @@ async function main(): Promise<void> {
   if (imageDumpDir) {
     try {
       ensurePrivateDirectory(imageDumpDir);
-      console.log(`[pxpipe] PXPIPE_DUMP_DIR set — dumping rendered PNGs to ${imageDumpDir}`);
+      console.log(`[fastpipe] PXPIPE_DUMP_DIR set — dumping rendered PNGs to ${imageDumpDir}`);
     } catch (err) {
-      console.warn(`[pxpipe] PXPIPE_DUMP_DIR unusable (${(err as Error).message}) — image dumping disabled`);
+      console.warn(`[fastpipe] PXPIPE_DUMP_DIR unusable (${(err as Error).message}) — image dumping disabled`);
       imageDumpDir = undefined;
     }
   }
@@ -1244,9 +1273,9 @@ async function main(): Promise<void> {
   // change decisions. Re-run that reconciliation before wiring one in.
   if (opts.sessionStateFile) {
     const restored = configureSessionStateStore(fileSessionStateStore(opts.sessionStateFile));
-    console.log(`[pxpipe] session state: ${restored} session(s) restored from ${opts.sessionStateFile}`);
+    console.log(`[fastpipe] session state: ${restored} session(s) restored from ${opts.sessionStateFile}`);
   } else {
-    console.log('[pxpipe] session state: persistence off (PXPIPE_SESSION_STATE)');
+    console.log('[fastpipe] session state: persistence off (PXPIPE_SESSION_STATE)');
   }
 
   const tracker: Tracker = new FileTracker(opts.eventsFile);
@@ -1298,7 +1327,10 @@ async function main(): Promise<void> {
       // whole process, so the "normal" arm can be scripted on its own port while
       // still logging real usage + count_tokens baselines to its own PXPIPE_LOG.
       // (The dashboard kill switch does the same thing at runtime.)
-      if (forcePassthrough || !dashboard.getCompressionEnabled()) return { compress: false };
+      // Pause file (`fastpipe pause` / `fastpipe resume`): its presence forces
+      // passthrough for every request from now on, survives restarts, and needs
+      // no restart to take effect. One stat per request.
+      if (forcePassthrough || !dashboard.getCompressionEnabled() || isPaused()) return { compress: false };
       // Active path: use DEFAULTS in transform.ts for break-even gating.
       return {};
     },
@@ -1318,7 +1350,7 @@ async function main(): Promise<void> {
           try {
             fs.writeFileSync(path.join(imageDumpDir, name), pngs[i]!, { mode: 0o600 });
           } catch (err) {
-            console.warn(`[pxpipe] PNG dump write failed: ${(err as Error).message}`);
+            console.warn(`[fastpipe] PNG dump write failed: ${(err as Error).message}`);
             break; // dir vanished / full — stop hammering it this request
           }
         }
@@ -1368,14 +1400,14 @@ async function main(): Promise<void> {
         const trimmed = e.errorBody.length > 400
           ? e.errorBody.slice(0, 400) + '…'
           : e.errorBody;
-        console.warn(`[pxpipe ${e.status}] upstream body: ${trimmed}`);
+        console.warn(`[fastpipe ${e.status}] upstream body: ${trimmed}`);
       }
 
       // Canary: surface unknown tag-shaped blocks so a Claude Code release
       // that adds a new dynamic tag is caught within hours.
       if (e.info?.unknownStaticTags && e.info.unknownStaticTags.length > 0) {
         console.warn(
-          `[pxpipe warn] unknown tag(s) in static slab: ${e.info.unknownStaticTags.join(', ')}  ` +
+          `[fastpipe warn] unknown tag(s) in static slab: ${e.info.unknownStaticTags.join(', ')}  ` +
             `— may need to add to DYNAMIC_BLOCK_TAGS (per-turn) or KNOWN_STATIC_TAGS (static) in src/core/transform.ts`,
         );
       }
@@ -1397,7 +1429,7 @@ async function main(): Promise<void> {
         // it (still too big to inline). We never lose the sha8 / error_body.
       }
 
-      // Persistent JSONL event for offline analysis (pxpipe stats etc.).
+      // Persistent JSONL event for offline analysis (fastpipe stats etc.).
       tracker.emit(toTrackEvent(e));
     },
   };
@@ -1433,7 +1465,7 @@ async function main(): Promise<void> {
       })
       .catch((err) => {
         if (isConnectionAbort(err) && (req.aborted || res.destroyed)) return;
-        console.error('[pxpipe] handler error:', err);
+        console.error('[fastpipe] handler error:', err);
         if (!res.headersSent) res.statusCode = 500;
         if (!res.writableEnded) res.end();
       });
@@ -1445,18 +1477,18 @@ async function main(): Promise<void> {
     opts.host === '127.0.0.1' || opts.host === 'localhost' || opts.host === '::1';
   const announce = () => {
     const routes = resolveUpstreams(config);
-    console.log(`[pxpipe] anthropic upstream → ${routes.anthropic}`);
-    console.log(`[pxpipe] openai upstream → ${routes.openai}`);
+    console.log(`[fastpipe] anthropic upstream → ${routes.anthropic}`);
+    console.log(`[fastpipe] openai upstream → ${routes.openai}`);
     if (opts.cloudflareUpstream !== undefined) {
       console.log(
-        `[pxpipe] cloudflare upstream → ${chatCompletionsUrl(opts.cloudflareUpstream)} ` +
+        `[fastpipe] cloudflare upstream → ${chatCompletionsUrl(opts.cloudflareUpstream)} ` +
           `(models: ${opts.cloudflareModels?.join(', ') || 'none'})`,
       );
     }
-    console.log(`[pxpipe] tracking events → ${opts.eventsFile}`);
+    console.log(`[fastpipe] tracking events → ${opts.eventsFile}`);
     if (opts.captureErrorReqBody) {
       console.warn(
-        `[pxpipe] PXPIPE_DEBUG_CAPTURE_4XX=1 — persisting full 4xx request and ` +
+        `[fastpipe] PXPIPE_DEBUG_CAPTURE_4XX=1 — persisting full 4xx request and ` +
           `upstream error bodies (prompts + any secrets in context) to ${bodySidecarDir}. ` +
           `Debugging only.`,
       );
@@ -1464,15 +1496,15 @@ async function main(): Promise<void> {
   };
 
   server.listen(opts.port, opts.host, () => {
-    console.log(`[pxpipe] listening on http://${displayHost}:${opts.port}`);
+    console.log(`[fastpipe] listening on http://${displayHost}:${opts.port}`);
     if (!isLoopbackHost) {
       console.warn(
-        `[pxpipe] bound to ${opts.host}; proxy API is reachable off-host, ` +
+        `[fastpipe] bound to ${opts.host}; proxy API is reachable off-host, ` +
           `but dashboard routes remain loopback-only.`,
       );
     }
     announce();
-    console.log(`[pxpipe] dashboard → http://127.0.0.1:${opts.port}/`);
+    console.log(`[fastpipe] dashboard → http://127.0.0.1:${opts.port}/`);
   });
 
   // server.close() only stops accepting new connections and waits for open
@@ -1484,11 +1516,11 @@ async function main(): Promise<void> {
   let shuttingDown = false;
   const shutdown = (sig: string) => {
     if (shuttingDown) {
-      console.log(`[pxpipe] ${sig} again — forcing exit`);
+      console.log(`[fastpipe] ${sig} again — forcing exit`);
       process.exit(130);
     }
     shuttingDown = true;
-    console.log(`[pxpipe] ${sig} — shutting down`);
+    console.log(`[fastpipe] ${sig} — shutting down`);
     // Pins first: losing a freeze-step floor re-keys a whole prefix.
     flushSessionState();
     // Flush+close the tracker so we don't drop the last few events on exit.
@@ -1509,6 +1541,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error('[pxpipe] fatal:', err);
+  console.error('[fastpipe] fatal:', err);
   process.exit(1);
 });

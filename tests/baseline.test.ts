@@ -177,3 +177,18 @@ describe('deriveBaselineWarmth (server-observed: cr>0 only)', () => {
     expect(warmEff).toBeLessThanOrEqual(coldEff);
   });
 });
+
+describe('deriveBaselineWarmth - first turn on a prefix another session warmed', () => {
+  it('counts the request\'s own cache write as text growth, not as a read', () => {
+    // No prior for this session, cr > 0: 15k of the 43k prefix was written new.
+    const r = deriveBaselineWarmth(undefined, 1000, 43_000, 12_000, CACHE_TTL_SEC, 'sys', 'tools', { cacheCreateTokens: 15_000 });
+    expect(r).toEqual({ warm: true, prevCacheable: 28_000 });
+  });
+  it('keeps full reuse when the write size is unknown or zero', () => {
+    expect(deriveBaselineWarmth(undefined, 1000, 43_000, 12_000).prevCacheable).toBe(43_000);
+    expect(deriveBaselineWarmth(undefined, 1000, 43_000, 12_000, CACHE_TTL_SEC, 'sys', 'tools', { cacheCreateTokens: 0 }).prevCacheable).toBe(43_000);
+  });
+  it('never reports negative reuse when the write exceeds the prefix', () => {
+    expect(deriveBaselineWarmth(undefined, 1000, 10_000, 500, CACHE_TTL_SEC, 'sys', 'tools', { cacheCreateTokens: 60_000 }).prevCacheable).toBe(0);
+  });
+});

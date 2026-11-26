@@ -45,7 +45,7 @@ import {
 } from './pin.js';
 import { factSheetText } from './factsheet.js';
 import { stripSchemaDescriptions, schemaHasStructure } from './schema-strip.js';
-import { bytesToBase64 } from './png.js';
+import { renderedPngBase64 } from './png.js';
 import {
   collapseHistory,
   HISTORY_SYNTHETIC_INTRO,
@@ -1798,7 +1798,7 @@ export async function textToImageBlocks(
   const droppedCodepoints = new Map<number, number>();
   const blocks: ImageBlock[] = [];
   for (const img of imgs) {
-    blocks.push(makeImageBlock(bytesToBase64(img.png), false));
+    blocks.push(makeImageBlock(renderedPngBase64(img.png), false));
     droppedChars += img.droppedChars;
     pixels += img.width * img.height;
     for (const [cp, n] of img.droppedCodepoints) {
@@ -2758,7 +2758,7 @@ export async function transformRequest(
   const imageBlocks: ImageBlock[] = [];
   for (let i = 0; i < images.length; i++) {
     const img = images[i]!;
-    const b64 = bytesToBase64(img.png);
+    const b64 = renderedPngBase64(img.png);
     info.imageBytes += img.png.length;
     info.imagePixels = (info.imagePixels ?? 0) + img.width * img.height;
     info.droppedChars = (info.droppedChars ?? 0) + img.droppedChars;

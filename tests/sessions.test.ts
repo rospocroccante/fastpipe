@@ -178,9 +178,10 @@ describe('aggregateSessions', () => {
     ]);
     const { sessions } = await aggregateSessions(tmp);
     const s = sessions.get('aaaaaaaa')!;
-    // 1790 (warm, no prior) + 95 (warm) + 0 (probe miss) = 1885
-    expect(s.tokensSavedEst).toBe(1_885);
-    expect(s.charsSaved).toBe(1_885 * 4);
+    // First tracked turn: its own 800-token cache write counts as text growth too:
+    // 17200*0.1 + 800*1.25 + 2000 - 2010 = 2710 (first turn) + 95 (warm) + 0 (probe miss) = 2805
+    expect(s.tokensSavedEst).toBe(2_805);
+    expect(s.charsSaved).toBe(2_805 * 4);
     expect(s.requestCount).toBe(4);
   });
 
@@ -382,7 +383,8 @@ describe('aggregateSessions', () => {
     const { sessions } = await aggregateSessions(tmp);
     // Row 40: 23184.9 - 7305.65 = +15879.25 (rounds to 15879).
     // Row 41: 26524.9 - 64518.25 = -37993.35 (0.15.0 said +228,633).
-    expect(sessions.get('c4fa7142')!.tokensSavedEst).toBe(15_879 - 37_993);
+    // Row 40 is the first tracked turn: its 401-token write is priced as text growth (+401*1.15 = 461).
+    expect(sessions.get('c4fa7142')!.tokensSavedEst).toBe(15_879 - 37_993 + 461);
   });
 
   it('keeps text cold on an image miss when the tools hash changed', async () => {

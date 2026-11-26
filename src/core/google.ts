@@ -15,7 +15,7 @@ import {
   type RenderedImage,
 } from './render.js';
 import { geminiVisionTokens, hasGeminiMeasuredProfile, resolveGeminiProfile } from './gemini-model-profiles.js';
-import { bytesToBase64 } from './png.js';
+import { renderedPngBase64 } from './png.js';
 import { classifyContent, compactSlabWhitespace, type TransformInfo } from './transform.js';
 import {
   prepareImagedRenderText,
@@ -794,7 +794,7 @@ function imagePart(image: RenderedImage): GooglePart {
   return {
     inlineData: {
       mimeType: 'image/png',
-      data: bytesToBase64(image.png),
+      data: renderedPngBase64(image.png),
     },
   };
 }
