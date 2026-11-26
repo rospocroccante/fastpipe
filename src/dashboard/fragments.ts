@@ -892,7 +892,7 @@ const CSS = `
     --tile-saved: linear-gradient(160deg, #2872e4, #1b54c2);
     --tile-quiet: linear-gradient(160deg, #69738a, #4b5469);
     --tile-over: linear-gradient(160deg, #c8402f, #a01246);
-    --pipe-quiet: #5d6880; --pipe-saved: #2468d8; --pipe-over: #b4283c; --switch-on: #34c759;
+    --pipe-quiet: #5d6880; --pipe-saved: #2468d8; --pipe-over: #b4283c; --switch-on: #34c759; --switch-off: rgba(120, 124, 136, .26); --switch-night: #3d5a9e;
     --float: 0 1rem 3rem rgba(20, 21, 26, .18);
     --radius: .625rem; --radius-pane: 1rem; --radius-small: .4375rem;
     --sans: 'Geist Variable', 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
@@ -902,16 +902,16 @@ const CSS = `
   /* Dark theme. Set before first paint by the <head> script (localStorage 'pp-theme' else system
      pref); toggled by ppTheme(). */
   :root[data-theme="dark"] {
-    --canvas: #090a0c; --pane: #141619; --inset: #1d2024; --raise: #202327; --hover: #272a2f;
-    --ink: #f5f6f3; --muted: #a9ada6; --faint: #8f948d;
-    --line-soft: #23262a; --line: #2c2f34; --line-strong: #3b3f45;
+    --canvas: #0e131a; --pane: #151c26; --inset: #1a2230; --raise: #1e2836; --hover: #263243;
+    --ink: #eaf0f8; --muted: #b3c0d1; --faint: #8f9db0;
+    --line-soft: #1f2937; --line: #283447; --line-strong: #3a4860;
     --accent: #4c8dff; --accent-ink: #8fb8ff;
     --red: #ff7b6e; --green: #86e59a; --amber: #efc04a;
     --tint-a: rgba(76, 141, 255, .13); --tint-b: rgba(47, 111, 224, .09);
     --band: linear-gradient(120deg, #4b5a78, #2a3145);
     --band-loss: linear-gradient(120deg, #7c2a22, #4d1424);
     --tile-quiet: linear-gradient(160deg, #56607a, #2f3545);
-    --pipe-quiet: #414a5e; --switch-on: #30d158;
+    --pipe-quiet: #414a5e; --switch-on: #30d158; --switch-off: rgba(132, 147, 166, .34); --switch-night: #3d5a9e;
     --float: 0 1rem 3rem rgba(0, 0, 0, .55);
     color-scheme: dark;
   }
@@ -970,25 +970,33 @@ const CSS = `
   .switch-state { grid-column: 4; }
   .switch-state.off { color: var(--red); font-weight: 600; }
   .theme-label { grid-column: 6; margin-left: .375rem; }
-  /* the two switches: a track and a knob that slides across it */
+  /* the two switches: a track and a knob that slides across it, and stretches while pressed */
   .switch-btn, .theme-btn {
-    grid-row: 1; position: relative; flex: none; width: 2.75rem; height: 1.625rem; padding: 0;
-    border: 0; border-radius: 999px; background: var(--line-strong); cursor: pointer;
+    grid-row: 1; position: relative; flex: none; width: 2.875rem; height: 1.75rem; padding: 0;
+    border: 0; border-radius: 999px; background: var(--switch-off); cursor: pointer;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .04), inset 0 1px 2px rgba(0, 0, 0, .10);
+    transition: background-color .3s ease; -webkit-tap-highlight-color: transparent;
   }
   .switch-btn { grid-column: 5; }
   .theme-btn { grid-column: 7; }
-  .switch-btn::after, .theme-btn::after {
-    content: ""; position: absolute; top: .125rem; left: .125rem; width: 1.375rem; height: 1.375rem;
-    border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .28);
-    transition: transform .22s ease, background-color .22s ease, box-shadow .22s ease;
+  .switch-btn::after, .theme-btn .knob {
+    content: ""; position: absolute; top: .125rem; left: .125rem; width: 1.5rem; height: 1.5rem;
+    border-radius: 999px; background: #fff;
+    box-shadow: 0 0 0 .5px rgba(0, 0, 0, .05), 0 3px 8px rgba(0, 0, 0, .16), 0 2px 1px rgba(0, 0, 0, .07);
+    transition: left .3s cubic-bezier(.3, .8, .25, 1), width .3s cubic-bezier(.3, .8, .25, 1);
   }
+  .switch-btn:active::after, .theme-btn:active .knob { width: 1.8125rem; }
+  .switch-btn[aria-checked="true"]::after, .theme-btn[aria-checked="true"] .knob { left: 1.25rem; }
+  .switch-btn[aria-checked="true"]:active::after, .theme-btn[aria-checked="true"]:active .knob { left: .9375rem; }
   .switch-btn[aria-checked="true"] { background: var(--switch-on); }
-  .switch-btn[aria-checked="true"]::after, .theme-btn[aria-checked="true"]::after { transform: translateX(1.125rem); }
-  /* day and night: the knob is a sun on a pale track, then a crescent on a dark one */
-  .theme-btn { background: #cfe0fb; }
-  .theme-btn::after { background: #f5b301; box-shadow: 0 0 0 .125rem rgba(245, 179, 1, .28); }
-  .theme-btn[aria-checked="true"] { background: #283350; }
-  .theme-btn[aria-checked="true"]::after { background: transparent; box-shadow: inset -.4375rem -.125rem 0 0 #f2f4f8; }
+  /* day and night: the knob carries a sun, then a moon */
+  .theme-btn[aria-checked="true"] { background: var(--switch-night); }
+  .theme-btn .knob { display: grid; place-items: center; }
+  .theme-btn .knob svg { grid-area: 1 / 1; width: .875rem; height: .875rem; transition: opacity .3s ease, transform .3s ease; }
+  .theme-btn .sun { color: #e8a013; }
+  .theme-btn .moon { color: #3d5a9e; opacity: 0; transform: rotate(-60deg) scale(.6); }
+  .theme-btn[aria-checked="true"] .sun { opacity: 0; transform: rotate(60deg) scale(.6); }
+  .theme-btn[aria-checked="true"] .moon { opacity: 1; transform: none; }
   .switch-btn:focus-visible, .theme-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   /* the note on which models are validated opens from the mark next to the name */
   .brand-tip {
@@ -1410,7 +1418,7 @@ export function renderPage(port: number, hostLabel = ''): string {
   </nav>
   <div id="frag-toggle" hx-get="/fragments/toggle" hx-trigger="load, every 2s" hx-swap="innerHTML"></div>
   <span class="theme-label">Dark</span>
-  <button type="button" id="theme-btn" class="theme-btn" role="switch" aria-checked="false" aria-label="Dark theme" title="Dark theme" onclick="ppTheme()"></button>
+  <button type="button" id="theme-btn" class="theme-btn" role="switch" aria-checked="false" aria-label="Dark theme" title="Dark theme" onclick="ppTheme()"><span class="knob" aria-hidden="true"><svg class="sun" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="8" r="2.9" fill="currentColor" stroke="none"/><path d="M8 1.2v1.6M8 13.2v1.6M1.2 8h1.6M13.2 8h1.6M3.2 3.2l1.1 1.1M11.7 11.7l1.1 1.1M3.2 12.8l1.1-1.1M11.7 4.3l1.1-1.1"/></svg><svg class="moon" viewBox="0 0 16 16" fill="currentColor"><path d="M13.6 10.1A6 6 0 0 1 5.9 2.4a.5.5 0 0 0-.66-.6 6.6 6.6 0 1 0 8.96 8.96.5.5 0 0 0-.6-.66Z"/></svg></span></button>
 </header>
 
 <div class="strip">
