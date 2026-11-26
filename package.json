@@ -1,10 +1,10 @@
 {
-  "name": "pxpipe-proxy",
-  "version": "0.16.0",
+  "name": "fastpipe",
+  "version": "0.16.0-fastpipe.4",
   "description": "Token-saving proxy for Claude Code: renders bulky context (system prompt, tool docs, old history) as dense PNGs to cut input tokens. Runs on Node and Cloudflare Workers.",
   "type": "module",
   "bin": {
-    "pxpipe": "bin/cli.js"
+    "fastpipe": "bin/cli.js"
   },
   "exports": {
     ".": {
@@ -38,6 +38,7 @@
   },
   "files": [
     "bin/",
+    "scripts/fastpipe-ctl.mjs",
     "dist/",
     "!dist/**/*.map",
     "assets/*LICENSE.txt",
@@ -98,10 +99,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/teamchong/pxpipe.git"
+    "url": "git+https://github.com/rospocroccante/fastpipe.git"
   },
-  "homepage": "https://github.com/teamchong/pxpipe#readme",
+  "homepage": "https://github.com/rospocroccante/fastpipe#readme",
   "bugs": {
-    "url": "https://github.com/teamchong/pxpipe/issues"
+    "url": "https://github.com/rospocroccante/fastpipe/issues"
   }
 }
