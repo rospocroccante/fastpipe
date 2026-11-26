@@ -381,14 +381,14 @@ describe('serveFragment', () => {
 describe('dashboard host label', () => {
   it('names the host in the title and topbar so two hosts are distinguishable', () => {
     const html = renderPage(47821, 'ber-dev-lm-ai');
-    expect(html).toContain('<title>ber-dev-lm-ai · pxpipe dashboard</title>');
+    expect(html).toContain('<title>ber-dev-lm-ai · fastpipe dashboard</title>');
     expect(html).toContain('class="hostchip"');
     expect(html).toContain('>ber-dev-lm-ai<');
   });
 
   it('renders the unlabelled page when no host label is given', () => {
     const html = renderPage(47821);
-    expect(html).toContain('<title>pxpipe — live dashboard</title>');
+    expect(html).toContain('<title>fastpipe — live dashboard</title>');
     expect(html).not.toContain('class="hostchip"');
   });
 
@@ -422,6 +422,14 @@ describe('dashboard page help UI', () => {
     expect(html).toContain('content: attr(data-tip)');
   });
 
+  it('shows one offline banner and stops polling instead of a toast per failed poll', () => {
+    const html = renderPage(47821);
+    expect(html).toContain('<div id="pp-offline" class="toast" role="status" hidden>');
+    expect(html).toContain("if (window.ppOffline) ev.preventDefault();");
+    expect(html).not.toContain('proxy unreachable: ');
+    expect(html).toContain('if (toasts.some(t => t.text === $event.detail.text)) return;');
+  });
+
   it('compares imaged requests with their own without-pxpipe counterfactual', () => {
     const html = renderHeaderFragment({
       compressed_paid_requests: 600,
@@ -435,8 +443,8 @@ describe('dashboard page help UI', () => {
     } as StatsPayload, 47821);
 
     expect(html).toContain('$0.1607');
-    expect(html).toContain('vs $0.4854 without pxpipe');
-    expect(html).not.toContain('vs $0.0722 without pxpipe');
+    expect(html).toContain('vs $0.4854 without fastpipe');
+    expect(html).not.toContain('vs $0.0722 without fastpipe');
     expect(html).toContain('same paid imaged requests');
   });
 });
@@ -1241,5 +1249,24 @@ describe('stats table: event-based cache hit rate', () => {
     const evRow = /<td>cache hit \(by events\)<\/td><td class="num">([^<]*)<\/td>/.exec(html);
     expect(evRow, 'the "cache hit (by events)" row must exist').not.toBeNull();
     expect(evRow![1]).toBe('66.7%'); // not '-', which is what the dead field produced
+  });
+});
+
+/**
+ * Regression: the "bytes / char" row multiplied the ratio by 100 and labelled
+ * it "x", so 43 GB of images over 1.5 G chars read "2825.586x" instead of 28.
+ */
+describe('stats table: image bytes per source char', () => {
+  it('divides image bytes by the chars they replaced', async () => {
+    const { newSummary, fold, summaryToJson } = await import('../src/stats.js');
+    let s = newSummary();
+    // Only compressed requests carry the pair; the totals skip everything else.
+    s = fold(s, { compressed: true, orig_chars: 1000, image_bytes: 2500 } as TrackEvent);
+    s = fold(s, { compressed: true, orig_chars: 3000, image_bytes: 6500 } as TrackEvent);
+
+    const html = renderStatsTableFragment({ summary: summaryToJson(s) } as never);
+    const row = /<td>bytes \/ char<\/td><td class="num">([^<]*)<\/td>/.exec(html);
+    expect(row, 'the "bytes / char" row must exist').not.toBeNull();
+    expect(row![1]).toBe('2.25'); // 9000 bytes over 4000 chars
   });
 });

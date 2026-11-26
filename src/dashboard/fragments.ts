@@ -64,11 +64,10 @@ export function renderToggleFragment(enabled: boolean): string {
   return (
     banner +
     `<div class="switch">` +
-    `<span class="switch-state ${enabled ? 'on' : 'off'}"><span class="switch-dot"></span>${enabled ? 'Compression on' : 'Compression off'}</span>` +
-    `<button class="switch-btn" type="button" hx-post="/fragments/toggle" hx-target="#frag-toggle" hx-vals='{"enabled": ${!enabled}}'${confirm}>` +
-    (enabled ? 'Disable compression' : 'Enable compression') +
+    `<span class="switch-state ${enabled ? 'on' : 'off'}">Compression</span>` +
+    // The id lets htmx carry the old state over the 2s swap, so the knob slides instead of jumping.
+    `<button class="switch-btn" type="button" id="switch-btn" role="switch" aria-checked="${enabled}" title="Kill switch. Compression turns itself back on when the proxy restarts." aria-label="${enabled ? 'Disable compression' : 'Enable compression'}" hx-post="/fragments/toggle" hx-target="#frag-toggle" hx-vals='{"enabled": ${!enabled}}'${confirm}>` +
     `</button>` +
-    `<span class="hint">kill switch · resets to on when you restart</span>` +
     `</div>`
   );
 }
@@ -150,32 +149,24 @@ export function renderModelsFragment(
     .join('');
   const moot = enabled
     ? ''
-    : `<div class="models"><span class="hint">compression is off — these settings have no effect right now</span></div>`;
+    : `<div class="models"><span class="hint">compression is off, these settings have no effect right now</span></div>`;
+  // Every chip sits in one row, family after family, so the view never stacks rows of buttons.
+  const family = (name: string, chips: string): string =>
+    `<span class="chip-group"><span class="models-label" title="Image ${name} models">${name}</span>${chips}</span>`;
   return (
     moot +
-    `<div class="models">` +
-    `<span class="models-label">Image Claude models</span>` +
-    claudeChips +
-    `<span class="hint">unlisted models get plain text</span>` +
-    `</div>` +
-    `<div class="models">` +
-    `<span class="models-label">Image Gemini models</span>` +
-    geminiChips +
-    `<span class="hint">on by default · toggle off to opt out · 100/100 vision reader</span>` +
-    `</div>` +
-    `<div class="models">` +
-    `<span class="models-label">Image OpenAI Responses models</span>` +
-    gptChips +
-    grokChips +
-    otherChips +
-    `<span class="hint">opt-in · no Anthropic cache_control</span>` +
-    `</div>` +
+    `<div class="chips">` +
+    family('Claude', claudeChips) +
+    family('Gemini', geminiChips) +
+    family('OpenAI Responses', gptChips + grokChips + otherChips) +
+    `</div><!-- /chips -->` +
+    `<p class="hint">Claude: unlisted models get plain text. Gemini: on by default (100/100 vision reader), toggle off to opt out. OpenAI Responses: opt-in, no Anthropic cache_control.</p>` +
     `<div class="models">` +
     `<span class="models-label">PXPIPE_MODELS</span>` +
     `<input class="models-csv" id="models-csv" type="text" name="list" ` +
     `value="${escapeHtml(active.join(','))}" spellcheck="false" autocomplete="off" ` +
     `hx-post="/fragments/models" hx-target="#frag-models" hx-trigger="change">` +
-    `<span class="hint">CSV of bases, or off · applies on enter/blur · export to persist</span>` +
+    `<span class="hint">CSV of bases, or off. Applies on enter or blur, export to persist.</span>` +
     `</div>`
   );
 }
@@ -189,16 +180,16 @@ void INPUT_USD_PER_MTOK; // suppress unused-var; renderHeaderFragment uses the s
 // Lifetime hero. Reads the SAME cumulative weighted totals as the header strip
 // (serveStats), so the headline and the "$ saved" tiles can never disagree, and
 // the number stops swinging on tiny per-session samples. Cache-weighted on
-// purpose ("lifeweight"): it answers "did pxpipe move my real, cache-discounted
+// purpose ("lifeweight"): it answers "did fastpipe move my real, cache-discounted
 // bill since this proxy started", not a raw token count.
 export function renderSessionSummaryFragment(s: StatsPayload): string {
   const measured = s.compressed_requests ?? 0;
   if (measured <= 0) {
     return (
-      `<div class="hero hero-empty">` +
-      `<div class="hero-eyebrow">Since start</div>` +
-      `<div class="hero-headline">Warming up…</div>` +
-      `<div class="hero-sub">Point Claude Code at this proxy with <code>ANTHROPIC_BASE_URL</code>, or launch it with <code>pxpipe warp -- claude</code> to keep <code>/remote-control</code> and claude.ai connectors working. Send a message and your running savings show up right here.</div>` +
+      `<div class="gauge gauge-empty">` +
+      `<header class="head"><h2 class="head-title">Warming up…</h2>` +
+      `<p class="head-sub">Point Claude Code at this proxy with <code>ANTHROPIC_BASE_URL</code>, or launch it with <code>fastpipe warp -- claude</code> to keep <code>/remote-control</code> and claude.ai connectors working. Send a message and your running savings show up right here.</p></header>` +
+      `<div class="record"><div class="gauge-track"></div></div>` +
       `</div>`
     );
   }
@@ -206,33 +197,58 @@ export function renderSessionSummaryFragment(s: StatsPayload): string {
   // Raw count_tokens would over-claim: most of the text baseline would have been
   // cheap cache-reads (~0.1×), not full-price tokens. Weighting both sides at their
   // real cache rate is the only comparison that can't contradict the Saved column.
-  // Input-only: pxpipe never touches output, so lumping it in just dampened the %.
+  // Input-only: fastpipe never touches output, so lumping it in just dampened the %.
   const baselineW = s.baseline_input_weighted ?? 0; // same context as text, cache-aware
   const actualW = s.actual_input_weighted ?? 0; // what we actually sent, cache-aware
-  const outMult = s.pricing_assumptions?.output_multiplier || 5;
-  const rawOutput = (s.output_weighted ?? 0) / outMult; // reply — never compressed
   const inputPct = baselineW > 0 ? (1 - actualW / baselineW) * 100 : 0;
-  const positive = inputPct >= 0;
-  const bigNum = `${Math.abs(inputPct).toFixed(0)}%`;
-  const word = positive ? 'fewer tokens' : 'more tokens';
+  const loss = inputPct < 0;
+
+  // One pipe on one scale. It is as long as the larger of the two amounts and filled from the
+  // left with the smaller one, so the saving (or the excess, on a loss) is the part left over.
+  const whole = Math.max(baselineW, actualW);
+  const part = loss ? baselineW : actualW;
+  const rest = whole - part;
+  let partPct = whole > 0 ? (part / whole) * 100 : 0;
+  // A part too small to draw at its true width still gets half a percent.
+  if (part > 0) partPct = Math.max(0.5, partPct);
+  if (rest > 0) partPct = Math.min(99.5, partPct);
+  const restPct = whole > 0 ? 100 - partPct : 0;
+  const seg = (cls: string, pct: number, name: string, amount: number): string =>
+    pct > 0
+      ? `<span class="gauge-seg ${cls}" style="width:${pct.toFixed(1)}%">` +
+        `<span class="seg-name">${name}</span><span class="seg-num">${kFmt(amount)}</span></span>`
+      : '';
+
+  // Without a text baseline there is nothing to compare against: show what was sent and say so.
+  const compared = baselineW > 0;
+  const spoken = !compared
+    ? `${kFmt(actualW)} input tokens sent, text baseline not measured yet`
+    : loss
+      ? `${kFmt(actualW)} input tokens sent, ${kFmt(rest)} more than the ${kFmt(baselineW)} the same context takes as text`
+      : `${kFmt(actualW)} input tokens sent, ${kFmt(rest)} not sent, out of ${kFmt(baselineW)} without fastpipe`;
+  // The whole pipe stands for the larger amount: the text on a saving, what was sent on a loss.
+  const wholeLabel = !compared
+    ? `<span class="rec-name">Text baseline not measured yet</span>`
+    : `<span class="rec-name">${loss ? 'With fastpipe' : 'Without fastpipe'}</span><span class="rec-num">${kFmt(whole)}</span>`;
 
   return (
-    `<div class="hero${positive ? '' : ' hero-neg'}">` +
-    `<div class="hero-eyebrow">Since start · ${numFmt(measured)} request${measured === 1 ? '' : 's'} imaged</div>` +
-    `<div class="hero-headline"><span class="hero-num">${bigNum}</span> ${word}</div>` +
-    `<div class="hero-sub">` +
-    `<strong>${kFmt(actualW)}</strong> provider-accounted input tokens vs <strong>${kFmt(baselineW)}</strong> if this same context ` +
-    `stayed plain text. Your latest messages and model output are never compressed.` +
+    `<div class="gauge${loss ? ' gauge-loss' : ''}">` +
+    `<header class="head"><h2 class="head-title"><span class="gauge-num">${Math.abs(inputPct).toFixed(0)}%</span> ` +
+    `${loss ? 'more input tokens' : 'fewer input tokens'}</h2>` +
+    `<p class="head-sub">Since start, after cache discounts. ${numFmt(measured)} request${measured === 1 ? '' : 's'} imaged.</p></header>` +
+    `<div class="record">` +
+    `<div class="rec-head">${wholeLabel}</div>` +
+    `<div class="gauge-track" role="img" aria-label="${spoken}" style="--cut:${rest > 0 ? (part > 0 ? partPct.toFixed(1) : '-100') : '200'}%">` +
+    (loss
+      ? seg('gauge-base', partPct, 'As text', part) + seg('gauge-over', restPct, 'Extra sent', rest)
+      : seg('gauge-sent', partPct, 'Sent', part) + seg('gauge-saved', restPct, 'Not sent', rest)) +
     `</div>` +
-    `<div class="hero-meta">` +
-    `Provider-token basis; cache discounts applied where measurable · ` +
-    `output untouched (${kFmt(rawOutput)}) · no $ assumptions` +
     `</div>` +
     `</div>`
   );
 }
 
-// ---- stat strip + "Show the math" drawer ----------------------------------
+// ---- rows of numbers + the "Math" group ------------------------------------
 
 function mathRow(key: string, val: number | string | undefined, note = ''): string {
   const v = typeof val === 'number' ? numFmt(val) : String(val ?? '-');
@@ -243,22 +259,16 @@ function mathBlock(title: string, body: string): string {
   return `<section class="math-block"><h4>${title}</h4><div class="formula">${body}</div></section>`;
 }
 
-/** Stat tile; `tip` adds a hover "?" explainer. */
-function statTile(
-  label: string,
-  value: string,
-  sub: string,
-  cls = '',
-  tip = '',
-): string {
-  const q = tip
-    ? `<span class="q" tabindex="0" aria-label="${escapeHtml(tip)}" data-tip="${escapeHtml(tip)}">?</span>`
-    : '';
+/** One row of numbers. `tip` makes the label focusable and shows the explanation on hover or focus. */
+function ledgerRow(label: string, value: string, note: string, cls = '', tip = ''): string {
+  const name = tip
+    ? `<span class="q" tabindex="0" aria-label="${escapeHtml(`${label}. ${tip}`)}" data-tip="${escapeHtml(tip)}">${label}</span>`
+    : label;
   return (
-    `<div class="tile">` +
-    `<div class="tile-label">${label}${q}</div>` +
-    `<div class="tile-value ${cls}">${value}</div>` +
-    `<div class="tile-sub">${sub}</div>` +
+    `<div class="ledger-row">` +
+    `<dt>${name}</dt>` +
+    `<dd class="ledger-val${cls ? ` ${cls}` : ''}">${value}</dd>` +
+    `<dd class="ledger-note">${note}</dd>` +
     `</div>`
   );
 }
@@ -273,27 +283,27 @@ export function renderHeaderFragment(s: StatsPayload, port: number): string {
 
   // Compare the same imaged requests on both sides. Passthrough requests are
   // generally smaller because the profitability gate selected them, so their
-  // average is not a valid "without pxpipe" counterfactual.
+  // average is not a valid "without fastpipe" counterfactual.
   const cAvg = s.compressed_avg_usd_per_request ?? 0;
   const paidImaged = s.compressed_paid_requests ?? 0;
   const withoutAvg = paidImaged > 0 ? cAvg + (s.saved_usd ?? 0) / paidImaged : 0;
-  const costTile = paidImaged > 0
-    ? statTile(
+  const costRow = paidImaged > 0
+    ? ledgerRow(
         'Cost per request',
         `$${cAvg.toFixed(4)}`,
-        `vs $${withoutAvg.toFixed(4)} without pxpipe`,
+        `vs $${withoutAvg.toFixed(4)} without fastpipe`,
         cAvg <= withoutAvg ? 'pos' : 'neg',
         'Average cost of paid imaged requests versus the cache-aware text counterfactual for those same requests. Unmeasured requests are assigned zero savings.',
       )
     : onlyUnpriced
-      ? statTile(
+      ? ledgerRow(
           'Cost per request',
           '—',
           'provider pricing not configured',
           'muted-val',
           'Token savings are available, but this provider is excluded from Claude-priced dollar estimates.',
         )
-      : statTile(
+      : ledgerRow(
         'Cost per request',
         'collecting…',
         'waiting for a paid imaged request',
@@ -301,15 +311,15 @@ export function renderHeaderFragment(s: StatsPayload, port: number): string {
         'The comparison appears after an imaged request returns provider usage.',
       );
 
-  const savedUsdTile = onlyUnpriced
-    ? statTile(
+  const savedUsdRow = onlyUnpriced
+    ? ledgerRow(
         'Estimated saved',
         '—',
         'provider pricing not configured',
         'muted-val',
         'Token savings are shown separately. Dollar estimates require provider-specific pricing and are not inferred from Claude rates.',
       )
-    : statTile(
+    : ledgerRow(
         'Estimated saved',
         `$${(s.saved_usd ?? 0).toFixed(2)}`,
         unpricedImaged > 0
@@ -319,19 +329,21 @@ export function renderHeaderFragment(s: StatsPayload, port: number): string {
         'Cache-aware estimate for requests covered by the configured pricing assumptions. Other providers remain excluded.',
       );
 
-  const strip =
-    `<div class="strip">` +
-    statTile('Requests', numFmt(s.requests), `${numFmt(s.compressed_requests)} turned into images`) +
-    statTile(
+  const ledger =
+    `<div class="numbers"><h2 class="list-head">Since start</h2><dl class="ledger">` +
+    ledgerRow(
       'Input tokens saved',
       numFmt(s.saved_input_tokens),
       'vs sending the same context as text',
       'pos',
        'Bulky context sent as compact images instead of text. Uses provider-reported input tokens and a measured or model-profile text counterfactual; recent turns and output stay text.',
      ) +
-    savedUsdTile +
-    costTile +
-    `</div>`;
+    savedUsdRow +
+    costRow +
+    ledgerRow('Requests', numFmt(s.requests), `${numFmt(s.compressed_requests)} turned into images`) +
+    // NOTE: tests assert the header fragment contains the port number.
+    ledgerRow('Running for', formatDuration(s.uptime_sec), `on port ${port}`) +
+    `</dl></div>`;
 
   // math drawer
   const savedMath =
@@ -354,12 +366,12 @@ export function renderHeaderFragment(s: StatsPayload, port: number): string {
     `<span class="src">source: ${escapeHtml(pa.source || 'docs.anthropic.com pricing')}</span>`;
 
   const costPerRequestMath =
-    `<div><span class="k">formula:</span> <span class="v">without_pxpipe = actual_imaged + measured_savings</span></div>` +
+    `<div><span class="k">formula:</span> <span class="v">without_fastpipe = actual_imaged + measured_savings</span></div>` +
     `<div><span class="k">why:</span> <span class="v">both averages cover the same paid imaged requests. Passthrough requests are not used because the profitability gate selects a different, generally smaller population.</span></div>` +
     `<div class="sp"></div>` +
     mathRow(`actual imaged (n=${paidImaged})`, `$${(s.compressed_actual_usd || 0).toFixed(4)}`, `total · avg $${cAvg.toFixed(4)}/req`) +
     mathRow('measured savings', `$${(s.saved_usd || 0).toFixed(4)}`, 'cache-aware input-side total') +
-    mathRow('without pxpipe', `$${withoutAvg.toFixed(4)}/req`, '<span class="op">=</span> (actual imaged + measured savings) / n') +
+    mathRow('without fastpipe', `$${withoutAvg.toFixed(4)}/req`, '<span class="op">=</span> (actual imaged + measured savings) / n') +
     `<span class="src">unmeasured imaged rows remain in n and actual cost, with zero assumed savings</span>`;
 
   const pctMath =
@@ -387,22 +399,19 @@ export function renderHeaderFragment(s: StatsPayload, port: number): string {
     mathRow('measured_redacted_blocks', s.measured_redacted_block_count, '(opaque encrypted blocks — billed but unmeasurable)') +
     `<span class="src">measured — no estimation</span>`;
 
-  const drawer =
-    `<details class="drawer" id="math-drawer">` +
-    `<summary>Show the math &amp; honesty receipts</summary>` +
-    `<div class="drawer-intro">Every number above, derived from the same per-event log. The proxy only moves <em>input</em> tokens; output is shown on both sides so percentages stay honest.</div>` +
+  // A block of its own, after the numbers: the page shows the numbers in the strip and this in the Math view.
+  const math =
+    `<section class="math">` +
+    `<p class="drawer-intro">Every number in the strip, derived from the same per-event log. The proxy only moves <em>input</em> tokens; output is shown on both sides so percentages stay honest.</p>` +
     `<div class="math-grid">` +
     mathBlock('Input tokens saved', savedMath) +
     mathBlock('Dollars saved', usdMath) +
     mathBlock('Cost per imaged request', costPerRequestMath) +
     mathBlock('Share of total spend (diagnostic)', pctMath) +
     mathBlock('Token-equivalent (what the weekly cap counts)', tokeqMath) +
-    `</div></details>`;
+    `</div></section>`;
 
-  // NOTE: tests assert the header fragment contains the port number.
-  const updated = `<div class="updated"><span class="live-dot"></span>live · port ${port} · uptime ${formatDuration(s.uptime_sec)}</div>`;
-
-  return strip + drawer + updated;
+  return ledger + math;
 }
 
 // ---- request x-ray (image vs text breakdown) -----------------------------
@@ -561,7 +570,7 @@ export function renderContextMapFragment(
         : `<span class="ctx-big">${-pct}%</span> bigger — images billed as <strong>${kFmt(real)}</strong> input tokens vs <strong>${kFmt(base)}</strong> for ${textNoun}`;
   // Clarifying sub-line. It must match the actual request's cache state: claiming
   // a 0.1× read discount when cache_read===0 would count hypothetical cache as a
-  // pxpipe effect, so cold rows price both paths cold.
+  // fastpipe effect, so cold rows price both paths cold.
   const subnote = !showCompare
     ? 'Billed tokens count cache discounts (reads at 0.1×) — no trustworthy text baseline for this request yet.'
     : google
@@ -605,7 +614,7 @@ export function renderContextMapFragment(
     `<div class="split-head">Compressed into images <span class="split-sum">${kFmt(totalImagedChars)} chars · ${c.imageCount} page${c.imageCount === 1 ? '' : 's'}</span></div>` +
     (imgRows || `<div class="ctx-row muted-row">nothing imaged this request</div>`) +
     capNote +
-    `<div class="split-note">pxpipe can misread exact values inside images — treat these as gist, not byte-exact.</div>` +
+    `<div class="split-note">fastpipe can misread exact values inside images — treat these as gist, not byte-exact.</div>` +
     `</div>` +
     `<div class="split-col split-txt">` +
     `<div class="split-head">Kept as plain text <span class="split-sum">byte-exact</span></div>` +
@@ -632,9 +641,9 @@ export function renderRecentFragment(p: RecentPayload): string {
   const rows = (p.recent ?? []).slice().reverse();
   const body =
     rows.length === 0
-      ? `<tr><td colspan="10" class="empty-cell">No requests yet — they stream in here live.</td></tr>`
+      ? `<tr><td colspan="9" class="empty-cell">No requests yet — they stream in here live.</td></tr>`
       : rows
-          .map((e: RecentRow, i: number) => {
+          .map((e: RecentRow) => {
             const viewId = (e.img_ids ?? (e.img_id != null ? [e.img_id] : []))[0];
             const viewLink =
               viewId != null
@@ -666,15 +675,14 @@ export function renderRecentFragment(p: RecentPayload): string {
               : `<span class="badge badge-txt">text</span>`;
             return (
               `<tr>` +
-              `<td class="muted">${i + 1}</td>` +
-              `<td><span class="pill pill-${statusCls(e.status)}">${e.status}</span></td>` +
-              `<td class="endp">${escapeHtml(shortPath(e.path))}</td>` +
+              savedCell +
               `<td>${e.model ? `<code>${escapeHtml(e.model)}</code>` : '<span class="muted">—</span>'}</td>` +
               `<td>${imaged}</td>` +
-              `<td class="num">${e.cache_read != null ? numFmt(e.cache_read) : '—'}</td>` +
               `<td class="num">${e.baseline_input != null ? numFmt(e.baseline_input) : '—'}</td>` +
               `<td class="num">${e.actual_input != null ? numFmt(e.actual_input) : '—'}</td>` +
-              savedCell +
+              `<td class="num">${e.cache_read != null ? numFmt(e.cache_read) : '—'}</td>` +
+              `<td><span class="pill pill-${statusCls(e.status)}">${e.status}</span></td>` +
+              `<td class="endp">${escapeHtml(shortPath(e.path))}</td>` +
               `<td class="num">${viewLink}</td>` +
               `</tr>`
             );
@@ -682,15 +690,15 @@ export function renderRecentFragment(p: RecentPayload): string {
           .join('');
   return (
     `<table class="rtable"><thead><tr>` +
-    `<th>#</th>` +
-    `<th>Result</th>` +
-    `<th>Endpoint</th>` +
+    // Columns run from the one that matters most to the one that matters least; the link stays in view.
+    `<th class="num" title="As-text minus Sent; negative means imaging cost more">Saved/lost</th>` +
     `<th>Model</th>` +
     `<th title="Was this request's context compressed into an image?">Sent as</th>` +
-    `<th class="num" title="Tokens the provider reported as served from cache">Cache hits</th>` +
     `<th class="num" title="Billing-equivalent input if kept as plain text, after cache create/read rates">As text</th>` +
     `<th class="num" title="Actual billing-equivalent input after imaging, after cache create/read rates">Sent</th>` +
-    `<th class="num" title="As-text minus Sent; negative means imaging cost more">Saved/lost</th>` +
+    `<th class="num" title="Tokens the provider reported as served from cache">Cache hits</th>` +
+    `<th>Result</th>` +
+    `<th>Endpoint</th>` +
     `<th></th>` +
     `</tr></thead><tbody>${body}</tbody></table>`
   );
@@ -718,11 +726,6 @@ export function renderLatestFragment(inp: LatestFragmentInput): string {
       ? `/proxy-latest-png?id=${pin}`
       : `/proxy-latest-png?t=${encodeURIComponent(meta)}`;
 
-  const pinBar =
-    pin != null
-      ? `<div class="viewer-bar"><button class="mini-btn" type="button" onclick="ppPin(null)">← back to latest</button><span class="mini-label">image #${pin}</span></div>`
-      : '';
-
   let main: string;
   if (pin != null && pinnedEvicted) {
     main = `<div class="evicted">image #${pin} is no longer in the buffer</div>`;
@@ -730,15 +733,24 @@ export function renderLatestFragment(inp: LatestFragmentInput): string {
     // When source pane is open the image appears inside the pairing — don't duplicate it.
     main = showSource ? '' : `<div class="frame"><img src="${imgSrc}" alt="rendered page" /></div>`;
   } else {
-    main = `<div class="empty-note">No images yet — they appear the instant pxpipe compresses a request.</div>`;
+    main = `<div class="empty-note">No images yet — they appear the instant fastpipe compresses a request.</div>`;
   }
 
+  // Every button of the viewer sits in one row above the image, with the caption beside them.
   const showBtn = pin != null ? !pinnedEvicted : hasPreview;
   const caption =
-    pin != null ? `image #${pin}` : meta ? `${escapeHtml(meta)} · top-left at native size` : '';
+    pin != null ? `image #${pin}` : meta ? `${escapeHtml(meta)}, top-left at native size` : '';
+  const backBtn =
+    pin != null ? `<button class="mini-btn" type="button" onclick="ppPin(null)">Back to latest</button>` : '';
   const srcBtn = showBtn
-    ? `<button class="mini-btn" type="button" onclick="ppSource(${showSource ? 'false' : 'true'})">${showSource ? 'hide source text' : 'show the text behind this image'}</button>`
+    ? `<button class="mini-btn" type="button" onclick="ppSource(${showSource ? 'false' : 'true'})">${showSource ? 'Hide source text' : 'Show source text'}</button>`
     : '';
+  const bar =
+    backBtn || srcBtn
+      ? `<div class="viewer-bar">${backBtn}${srcBtn}<span class="mini-label">${caption}</span></div><!-- /viewer-bar -->`
+      : caption
+        ? `<div class="viewer-caption">${caption}</div>`
+        : '';
 
   let pane = '';
   if (showSource) {
@@ -752,7 +764,7 @@ export function renderLatestFragment(inp: LatestFragmentInput): string {
           `</div>`;
   }
 
-  return pinBar + main + `<div class="viewer-caption">${caption} ${srcBtn}</div>` + pane;
+  return bar + main + pane;
 }
 
 // ---- sessions bar chart --------------------------------------------------
@@ -809,7 +821,7 @@ export function renderStatsTableFragment(p: FullStatsPayload): string {
   const hitRateEv =
     s.eventsWithUsage > 0 ? ((s.cacheHitEvents / s.eventsWithUsage) * 100).toFixed(1) + '%' : '-';
   const charRatio =
-    s.origCharsTotal > 0 ? ((s.imageBytesTotal / s.origCharsTotal) * 100).toFixed(3) + 'x' : '-';
+    s.origCharsTotal > 0 ? (s.imageBytesTotal / s.origCharsTotal).toFixed(2) : '-';
 
   // NOTE: the literal word "requests" is asserted by tests.
   const tr = (k: string, v: string) => `<tr><td>${k}</td><td class="num">${v}</td></tr>`;
@@ -842,345 +854,425 @@ export function renderStatsTableFragment(p: FullStatsPayload): string {
 
 // ---- page shell -------------------------------------------------------------
 
-// Favicon mirrors the .flame-dot glyph: a glossy flame sphere (radial highlight
-// at 35%/30%, --flame -> --flame-strong) ringed by a faint --flame-tint halo.
-// Inlined as a URL-encoded SVG data URI so the dashboard stays self-contained
-// (no extra route/static asset). Keep colors in sync with :root in CSS below.
-const FAVICON =
-  "data:image/svg+xml," +
-  "%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E" +
-  "%3Cdefs%3E%3CradialGradient%20id='f'%20cx='35%25'%20cy='30%25'%20r='80%25'%3E" +
-  "%3Cstop%20offset='0%25'%20stop-color='%23ffd0a8'/%3E" +
-  "%3Cstop%20offset='55%25'%20stop-color='%23ff5a1f'/%3E" +
-  "%3Cstop%20offset='100%25'%20stop-color='%23e8420a'/%3E" +
-  "%3C/radialGradient%3E%3C/defs%3E" +
-  "%3Ccircle%20cx='16'%20cy='16'%20r='15.5'%20fill='%23fff1ea'/%3E" +
-  "%3Ccircle%20cx='16'%20cy='16'%20r='10'%20fill='url(%23f)'/%3E%3C/svg%3E";
+// The mark: the f of fastpipe drawn as a bent pipe, with a flange at its open end and the crossbar as a second
+// length of pipe. One colour, so in the page it takes the accent from CSS (currentColor) in both themes.
+// assets/logo.svg carries the same shapes for the README: change both together.
+const logoShapes = (colour: string): string =>
+  `<path d="M44 112V52A26 26 0 0 1 70 26H90" fill="none" stroke="${colour}" stroke-width="24" stroke-linejoin="round"/>` +
+  `<rect x="87" y="8" width="13" height="36" rx="3.5" fill="${colour}"/>` +
+  `<rect x="18" y="58" width="58" height="14" rx="3.5" fill="${colour}"/>`;
 
+const LOGO =
+  `<svg class="logo" viewBox="0 0 120 120" role="img" aria-label="fastpipe">${logoShapes('currentColor')}</svg>`;
+
+// Favicon: the same mark in white on the accent blue. Inlined as an SVG data URI so the dashboard stays
+// self-contained (no extra route or static asset). Keep the blue in sync with --accent in the CSS below.
+const FAVICON =
+  'data:image/svg+xml,' +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><rect width="120" height="120" rx="27" fill="#1f6feb"/>` +
+      `<g transform="translate(16.5 15) scale(.75)">${logoShapes('#fff')}</g></svg>`,
+  );
+
+// No web fonts and no images: the page stays one small self-contained document. Red is only for a
+// loss or a failure.
 const CSS = `
+  /* One screen, read from left to right. A bar of buttons, then a strip that opens with the saving
+     and continues with the numbers, then the view picked in the bar. Blue is fastpipe's own colour
+     and marks the saving. */
   :root {
-    --bg: #faf6f2; --surface: #ffffff; --surface-2: #fbf4ee;
-    --border: #efe5db; --border-strong: #e4d6c8;
-    --ink: #241f1b; --ink-2: #5d534a; --muted: #9b9189;
-    --flame: #ff5a1f; --flame-strong: #e8420a; --flame-ink: #bd3a08; --flame-tint: #fff1ea;
-    --good: #1f9d57; --good-tint: #e7f6ee; --bad: #d8483b; --bad-tint: #fcebe9; --warn: #b7791f; --warn-tint: #fbf0db;
-    --img: #ff5a1f; --img-ink: #bd3a08; --img-tint: #fff1ea;
-    --txt: #2f7db0; --txt-ink: #1f5f8b; --txt-tint: #e9f3fb;
-    --radius: 14px;
-    --shadow: 0 1px 2px rgba(60,35,15,.05), 0 8px 24px rgba(60,35,15,.05);
-    --mono: 'SF Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --canvas: #e9ecf1; --pane: #ffffff; --inset: #f3f5f8; --raise: #eef0f4; --hover: #e4e7ed;
+    --ink: #14151a; --muted: #555966; --faint: #646977;
+    --line-soft: #eceef2; --line: #e1e4ea; --line-strong: #cdd1d9;
+    --accent: #1f6feb; --accent-ink: #1558c9;
+    --red: #b02016; --green: #1a7f37; --amber: #8a6100;
+    --tint-a: rgba(31, 111, 235, .10); --tint-b: rgba(47, 111, 224, .07);
+    --band: linear-gradient(120deg, #c9daf8, #e3eafa);
+    --band-loss: linear-gradient(120deg, #f8d3cd, #f6e2e6);
+    --tile-saved: linear-gradient(160deg, #2872e4, #1b54c2);
+    --tile-quiet: linear-gradient(160deg, #69738a, #4b5469);
+    --tile-over: linear-gradient(160deg, #c8402f, #a01246);
+    --pipe-quiet: #5d6880; --pipe-saved: #2468d8; --pipe-over: #b4283c; --switch-on: #34c759;
+    --float: 0 1rem 3rem rgba(20, 21, 26, .18);
+    --radius: .625rem; --radius-pane: 1rem; --radius-small: .4375rem;
+    --sans: 'Geist Variable', 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    --mono: 'Geist Mono Variable', 'Geist Mono', ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
     color-scheme: light;
   }
-  /* Dark theme: same warm-flame identity, inverted neutrals. Set before first
-     paint by the <head> script (localStorage 'pp-theme' else system pref);
-     toggled by ppTheme(). Accents (flame/img/txt) are lifted for contrast. */
+  /* Dark theme. Set before first paint by the <head> script (localStorage 'pp-theme' else system
+     pref); toggled by ppTheme(). */
   :root[data-theme="dark"] {
-    --bg: #17120f; --surface: #211a15; --surface-2: #2a211b;
-    --border: #352a22; --border-strong: #46382e;
-    --ink: #f6efe8; --ink-2: #cabbac; --muted: #9a8c7d;
-    --flame: #ff6a33; --flame-strong: #e8420a; --flame-ink: #ff9a63; --flame-tint: #3a2318;
-    --good: #3fbd76; --good-tint: #15291f; --bad: #f0645a; --bad-tint: #341b18; --warn: #d99a3a; --warn-tint: #33260f;
-    --img: #ff6a33; --img-ink: #ff9a63; --img-tint: #3a2318;
-    --txt: #5aa3d6; --txt-ink: #8cc3ea; --txt-tint: #142631;
-    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 28px rgba(0,0,0,.45);
+    --canvas: #090a0c; --pane: #141619; --inset: #1d2024; --raise: #202327; --hover: #272a2f;
+    --ink: #f5f6f3; --muted: #a9ada6; --faint: #8f948d;
+    --line-soft: #23262a; --line: #2c2f34; --line-strong: #3b3f45;
+    --accent: #4c8dff; --accent-ink: #8fb8ff;
+    --red: #ff7b6e; --green: #86e59a; --amber: #efc04a;
+    --tint-a: rgba(76, 141, 255, .13); --tint-b: rgba(47, 111, 224, .09);
+    --band: linear-gradient(120deg, #4b5a78, #2a3145);
+    --band-loss: linear-gradient(120deg, #7c2a22, #4d1424);
+    --tile-quiet: linear-gradient(160deg, #56607a, #2f3545);
+    --pipe-quiet: #414a5e; --switch-on: #30d158;
+    --float: 0 1rem 3rem rgba(0, 0, 0, .55);
     color-scheme: dark;
   }
-  /* Dark fix-ups for the few intentionally hard-coded (light) spots. */
-  :root[data-theme="dark"] .banner { border-color: #6e342c; color: #f4b9b1; }
-  :root[data-theme="dark"] .banner strong { color: #ffd6cf; }
-  :root[data-theme="dark"] .toast { box-shadow: 0 8px 24px rgba(0,0,0,.5); }
   * { box-sizing: border-box; }
-  body { margin: 0; padding: 22px 26px 64px; background: var(--bg); color: var(--ink-2);
-    font: 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-    -webkit-font-smoothing: antialiased; }
-  b, strong { color: var(--ink); }
-  .good { color: var(--good); } .bad { color: var(--bad); }
-  .muted { color: var(--muted); }
+  /* a colour never jumps: it fades, on hover, on a switch and on the change of theme */
+  *, *::before, *::after { transition: background-color .25s ease, border-color .25s ease, color .25s ease; }
+  html { -webkit-text-size-adjust: 100%; background: var(--canvas); }
+  body {
+    display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: .75rem;
+    margin: 0 auto; max-width: 120rem; min-height: 100vh; padding: 0 .75rem .75rem;
+    background:
+      radial-gradient(68.75rem 38.75rem at 12% -12%, var(--tint-a), transparent 62%),
+      radial-gradient(56.25rem 35rem at 104% -6%, var(--tint-b), transparent 60%);
+    background-repeat: no-repeat;
+    color: var(--ink); font: .875rem/1.5 var(--sans); -webkit-font-smoothing: antialiased;
+  }
+  strong, b { font-weight: 600; }
+  a { color: var(--accent-ink); }
+  button { font: inherit; }
+  code { font-family: var(--mono); font-size: .92em; color: var(--ink); }
+  pre {
+    margin: .5rem 0; padding: .625rem .75rem; overflow-x: auto;
+    background: var(--inset); border: 1px solid var(--line); border-radius: var(--radius);
+    font: .75rem/1.55 var(--mono); color: var(--ink);
+  }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .good { color: var(--green); }
+  .bad { color: var(--red); }
+  .muted { color: var(--faint); }
 
-  /* topbar */
-  .topbar { display: flex; align-items: flex-start; justify-content: space-between;
-    gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
-  .brand { display: flex; align-items: center; gap: 12px; }
-  .flame-dot { width: 14px; height: 14px; border-radius: 50%;
-    background: radial-gradient(circle at 35% 30%, #ffd0a8, var(--flame) 55%, var(--flame-strong));
-    box-shadow: 0 0 0 4px var(--flame-tint); flex: none; }
-  .wordmark { font-size: 22px; font-weight: 800; color: var(--ink); letter-spacing: -0.02em; }
-  .wordmark-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  /* the bar: the only row of buttons that is always on screen */
+  .bar {
+    display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto auto auto; align-items: center;
+    gap: .5rem .625rem; padding: .625rem .25rem 0;
+  }
+  .brand { grid-column: 1; grid-row: 1; display: flex; align-items: center; gap: .625rem; min-width: 0; margin-right: .75rem; }
+  .logo { width: 1.5rem; height: 1.5rem; flex: none; color: var(--accent); }
+  .wordmark { margin: 0; font-size: .8125rem; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; color: var(--ink); }
   /* Which machine is this? Two dashboards from two hosts look identical otherwise. */
-  .hostchip { font-size: 11.5px; font-weight: 600; color: var(--muted); padding: 1px 7px;
-    border: 1px solid var(--line); border-radius: 999px; white-space: nowrap; }
-  .tagline { font-size: 12.5px; color: var(--muted); margin-top: 1px; max-width: 460px; }
-  .controls { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  .hostchip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .8125rem; color: var(--faint); }
+  .adv-btn { grid-column: 2; grid-row: 1; }
+  .adv-btn::after { content: ""; display: inline-block; width: .375rem; height: .375rem; margin: 0 0 .125rem .5rem; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); transition: transform .2s ease; }
+  .adv-btn[aria-expanded="true"]::after { margin-bottom: -.125rem; transform: rotate(-135deg); }
+  .tabs[hidden] { display: none; }
+  .tabs { grid-column: 3; grid-row: 1; display: flex; gap: .25rem; min-width: 0; padding: 2px; overflow-x: auto; scrollbar-width: none; }
+  .tab {
+    flex: none; padding: .3125rem .875rem; background: transparent; color: var(--muted);
+    border: 1px solid transparent; border-radius: var(--radius);
+    font-size: .875rem; font-weight: 500; line-height: 1.4; cursor: pointer; transition: background-color .11s, color .11s;
+  }
+  .tab:hover { background: var(--raise); color: var(--ink); }
+  .tab[aria-pressed="true"] { background: var(--pane); border-color: var(--line); color: var(--ink); font-weight: 600; }
+  /* on/off: the state and its button are items of the bar; the notice takes a line under it */
+  #frag-toggle, .switch { display: contents; }
+  .switch-state, .theme-label { grid-row: 1; margin-right: -.125rem; font-size: .8125rem; white-space: nowrap; color: var(--muted); }
+  .switch-state { grid-column: 4; }
+  .switch-state.off { color: var(--red); font-weight: 600; }
+  .theme-label { grid-column: 6; margin-left: .375rem; }
+  /* the two switches: a track and a knob that slides across it */
+  .switch-btn, .theme-btn {
+    grid-row: 1; position: relative; flex: none; width: 2.75rem; height: 1.625rem; padding: 0;
+    border: 0; border-radius: 999px; background: var(--line-strong); cursor: pointer;
+  }
+  .switch-btn { grid-column: 5; }
+  .theme-btn { grid-column: 7; }
+  .switch-btn::after, .theme-btn::after {
+    content: ""; position: absolute; top: .125rem; left: .125rem; width: 1.375rem; height: 1.375rem;
+    border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .28);
+    transition: transform .22s ease, background-color .22s ease, box-shadow .22s ease;
+  }
+  .switch-btn[aria-checked="true"] { background: var(--switch-on); }
+  .switch-btn[aria-checked="true"]::after, .theme-btn[aria-checked="true"]::after { transform: translateX(1.125rem); }
+  /* day and night: the knob is a sun on a pale track, then a crescent on a dark one */
+  .theme-btn { background: #cfe0fb; }
+  .theme-btn::after { background: #f5b301; box-shadow: 0 0 0 .125rem rgba(245, 179, 1, .28); }
+  .theme-btn[aria-checked="true"] { background: #283350; }
+  .theme-btn[aria-checked="true"]::after { background: transparent; box-shadow: inset -.4375rem -.125rem 0 0 #f2f4f8; }
+  .switch-btn:focus-visible, .theme-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* the note on which models are validated opens from the mark next to the name */
+  .brand-tip {
+    position: relative; flex: none; display: inline-grid; place-items: center; width: 1.125rem; height: 1.125rem;
+    border-radius: 50%; background: var(--raise); border: 1px solid var(--line); text-decoration: none;
+    font-size: .6875rem; font-weight: 600; color: var(--muted);
+  }
+  .brand-tip::after { left: 0; right: auto; top: calc(100% + .375rem); width: min(21rem, 80vw); }
+  .banner { grid-column: 1 / -1; grid-row: 2; padding: .5rem .75rem; border-radius: var(--radius); background: color-mix(in srgb, var(--red) 12%, transparent); font-size: .8125rem; color: var(--muted); }
+  .banner strong { color: var(--red); }
+  .hint { margin: 0; font-size: .75rem; color: var(--faint); }
 
-  /* kill switch */
-  .banner { display: block; margin: 0 0 8px; padding: 9px 13px; background: var(--bad-tint);
-    border: 1px solid #f3b6af; border-radius: 9px; color: #9c2b20; font-size: 12px; max-width: 520px; }
-  .banner strong { color: #8a2117; }
-  .switch { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; justify-content: flex-end; }
-  .switch-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
-    padding: 3px 10px; border-radius: 999px; }
-  .switch-state.on { color: var(--good); background: var(--good-tint); }
-  .switch-state.off { color: var(--bad); background: var(--bad-tint); }
-  .switch-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-  .switch-btn { background: var(--surface); color: var(--ink); border: 1px solid var(--border-strong);
-    padding: 6px 13px; cursor: pointer; border-radius: 8px; font: inherit; font-size: 12px; font-weight: 600;
-    box-shadow: var(--shadow); }
-  .switch-btn:hover { border-color: var(--flame); color: var(--flame-ink); }
-  .hint { color: var(--muted); font-size: 11px; }
-  .theme-btn { background: var(--surface); color: var(--ink-2); border: 1px solid var(--border-strong);
-    padding: 5px 11px; cursor: pointer; border-radius: 8px; font: inherit; font-size: 12px; font-weight: 600;
-    box-shadow: var(--shadow); display: inline-flex; align-items: center; gap: 6px; line-height: 1; }
-  .theme-btn:hover { border-color: var(--flame); color: var(--flame-ink); }
+  /* one button everywhere: a raised key */
+  .mini-btn, .chip {
+    flex: none; padding: .3125rem .75rem; background: var(--raise); color: var(--ink);
+    border: 1px solid var(--line); border-radius: var(--radius);
+    font-size: .8125rem; font-weight: 500; line-height: 1.4; white-space: nowrap; cursor: pointer;
+    transition: background-color .11s, border-color .11s;
+  }
+  .mini-btn:hover, .chip:hover { background: var(--hover); border-color: var(--line-strong); }
 
-  /* model chips */
-  .models { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 18px; }
-  .models-label { color: var(--ink-2); font-size: 12px; font-weight: 600; }
-  .models-csv { flex: 1 1 260px; min-width: 220px; color: var(--ink); background: var(--surface);
-    border: 1px solid var(--border-strong); border-radius: 6px; padding: 4px 8px;
-    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .models-csv:focus { outline: none; border-color: var(--flame-ink); }
-  .models-routing { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 18px; }
-  #routing-help { border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface);
-    color: var(--ink); max-width: 600px; padding: 16px 20px; }
-  #routing-help::backdrop { background: rgba(20, 12, 6, .4); }
-  #routing-help h3 { margin: 0 0 8px; font-size: 14px; color: var(--ink); }
-  #routing-help p, #routing-help li { font-size: 12px; line-height: 1.55; color: var(--ink-2); margin: 6px 0; }
-  #routing-help ul { margin: 6px 0; padding-left: 18px; }
-  #routing-help code { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); }
-  #routing-help pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px;
-    padding: 8px 10px; margin: 8px 0; overflow-x: auto;
-    font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); }
-  .chip { background: var(--surface); color: var(--ink-2); border: 1px solid var(--border-strong);
-    border-radius: 999px; padding: 4px 12px; cursor: pointer; font: inherit; font-size: 12px; }
-  .chip:hover { border-color: var(--flame); color: var(--flame-ink); }
-  .chip.on { background: var(--flame-tint); color: var(--flame-ink); border-color: var(--flame);
-    font-weight: 600; }
+  /* the strip: the saving on the left, the numbers after it, the pipe under both */
+  .strip {
+    display: grid; grid-template-columns: minmax(24rem, 34%) minmax(0, 1fr); grid-template-areas: "head nums" "pipe pipe";
+    background: var(--pane); border: 1px solid var(--line-soft); border-radius: var(--radius-pane);
+  }
+  #frag-session, .gauge { display: contents; }
+  .head {
+    grid-area: head; min-width: 0; padding: 1.5rem 1.75rem 1.75rem;
+    border-radius: calc(var(--radius-pane) - 1px) 0 0 0;
+    background: linear-gradient(to bottom, transparent 45%, var(--pane)), linear-gradient(to right, transparent 30%, var(--pane)), var(--band);
+  }
+  .gauge-loss .head { background: linear-gradient(to bottom, transparent 45%, var(--pane)), linear-gradient(to right, transparent 30%, var(--pane)), var(--band-loss); }
+  .head-title { margin: 0; font-size: 1.125rem; font-weight: 600; line-height: 1.25; color: var(--muted); }
+  .gauge-num { display: block; margin-bottom: .375rem; font-size: clamp(4rem, 8vw, 6.5rem); font-weight: 700; line-height: 1; letter-spacing: -.04em; font-variant-numeric: tabular-nums; color: var(--ink); }
+  .gauge-empty .head-title { font-size: 1.5rem; color: var(--ink); }
+  .head-sub { margin: .375rem 0 0; font-size: .75rem; color: var(--muted); }
 
-  /* collapsed model-scope section (#116): the default compress scope is Fable 5
-     only, so the three family rows stay hidden until the user opts in. The
-     <details> wrapper lives in the static shell — NOT inside #frag-models —
-     because the every-2s innerHTML poll would otherwise reset its open state. */
-  .models-collapse { margin: 0 0 18px; }
-  .models-collapse .models { margin: 0 0 10px; }
-  .models-collapse .models:last-child { margin-bottom: 0; }
-  .models-summary { cursor: pointer; color: var(--ink-2); font-size: 12px; font-weight: 600;
-    margin: 0 0 8px; user-select: none; }
-  .models-summary:hover { color: var(--flame-ink); }
-  .models-warning { color: var(--ink-2); background: var(--surface); border: 1px solid var(--border-strong);
-    border-left: 3px solid var(--bad); border-radius: 8px; padding: 8px 12px; font-size: 12px;
-    margin: 0 0 12px; }
+  /* the numbers: one column each, in order of weight */
+  #frag-header { grid-area: nums; min-width: 0; }
+  .numbers { height: 100%; }
+  .list-head { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .ledger { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); height: 100%; margin: 0; }
+  .ledger-row { position: relative; display: flex; flex-direction: column; gap: .125rem; min-width: 0; padding: 2.25rem 1.125rem 1rem; border-left: 1px solid var(--line-soft); }
+  .ledger dt { font-size: .75rem; font-weight: 500; color: var(--muted); }
+  .ledger dd { margin: 0; }
+  .ledger-val { font: 600 clamp(1.0625rem, 1.5vw, 1.375rem)/1.2 var(--mono); white-space: nowrap; letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--ink); }
+  .ledger-note { font-size: .75rem; line-height: 1.35; color: var(--faint); }
+  .ledger-val.pos { color: var(--accent-ink); }
+  .ledger-val.neg, .ledger-val.neg + .ledger-note { color: var(--red); }
+  .ledger-val.muted-val { font-family: var(--sans); font-size: 1rem; font-weight: 400; letter-spacing: 0; color: var(--faint); }
+  /* a label that explains itself on hover or keyboard focus */
+  .q { cursor: help; text-decoration: underline dotted var(--line-strong); text-underline-offset: 3px; }
+  .q::after {
+    content: attr(data-tip); position: absolute; z-index: 50; left: .5rem; right: .5rem; top: calc(100% - .5rem);
+    padding: .5rem .625rem; border-radius: var(--radius);
+    background: var(--ink); color: var(--canvas); box-shadow: var(--float);
+    font-size: .75rem; font-weight: 400; line-height: 1.4; text-align: left;
+    pointer-events: none; opacity: 0; visibility: hidden; transform: translateY(-4px);
+    transition: opacity .11s, transform .11s, visibility .11s;
+  }
+  .q:hover::after, .q:focus-visible::after { opacity: 1; visibility: visible; transform: translateY(0); }
 
-  /* session hero */
-  #frag-session { display: block; margin-bottom: 16px; }
-  .hero { background: linear-gradient(135deg, var(--flame-tint), var(--surface) 60%); border: 1px solid var(--border);
-    border-left: 4px solid var(--flame); border-radius: var(--radius); padding: 20px 24px; box-shadow: var(--shadow); }
-  .hero-neg { border-left-color: var(--bad); }
-  .hero-eyebrow { font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
-    color: var(--muted); margin-bottom: 8px; }
-  .hero-headline { font-size: 28px; font-weight: 700; color: var(--ink); letter-spacing: -0.02em; line-height: 1.1; }
-  .hero-num { font-size: 56px; font-weight: 800; line-height: 1; margin-right: 8px;
-    background: linear-gradient(135deg, #ff9a4d, var(--flame) 55%, var(--flame-strong));
-    -webkit-background-clip: text; background-clip: text; color: transparent;
-    font-variant-numeric: tabular-nums; }
-  .hero-neg .hero-num { background: linear-gradient(135deg, #f0857a, var(--bad));
-    -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .hero-sub { font-size: 14.5px; color: var(--ink-2); margin-top: 12px; max-width: 720px; }
-  .hero-meta { font-size: 12px; color: var(--muted); margin-top: 10px; padding-top: 10px;
-    border-top: 1px dashed var(--border-strong); }
-  .hero-empty .hero-headline { color: var(--muted); font-size: 24px; }
+  /* the pipe: the whole on the left, then one tile for each part of it */
+  .record { grid-area: pipe; display: flex; align-items: center; gap: 1rem; min-width: 0; padding: .25rem .75rem .75rem 1.75rem; }
+  .rec-head { flex: none; display: flex; align-items: baseline; gap: .5rem; white-space: nowrap; }
+  .rec-name { font-size: .8125rem; font-weight: 600; color: var(--ink); }
+  .rec-num { font: 600 .8125rem var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); }
+  .gauge-track {
+    flex: 1 1 auto; display: flex; min-width: 0; height: 2.75rem; overflow: hidden; border-radius: var(--radius);
+    background: linear-gradient(to right, var(--pipe-quiet) calc(var(--cut, 200%) - 4.5rem), var(--pipe-saved) calc(var(--cut, 200%) + 4.5rem));
+  }
+  .gauge-loss .gauge-track { background: linear-gradient(to right, var(--pipe-quiet) calc(var(--cut, 200%) - 4.5rem), var(--pipe-over) calc(var(--cut, 200%) + 4.5rem)); }
+  .gauge-track:empty { background: none; }
+  .gauge-track:empty { border: 1px dashed var(--line-strong); border-radius: var(--radius); }
+  .gauge-seg {
+    display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+    flex: 0 1 auto; min-width: .5rem; overflow: hidden; padding: 0 .875rem;
+    color: #fff; white-space: nowrap; container-type: inline-size;
+  }
+  .seg-name { font-size: .8125rem; font-weight: 600; }
+  .seg-num { font: 600 .9375rem var(--mono); font-variant-numeric: tabular-nums; }
+  /* a tile too narrow for its words keeps the amount, then only its colour */
+  @container (max-width: 7.5rem) { .seg-name { display: none; } }
+  @container (max-width: 3.5rem) { .seg-num { display: none; } }
 
-  /* stat strip */
-  .strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 14px; }
-  @media (max-width: 1000px) { .strip { grid-template-columns: repeat(2, 1fr); } }
-  @media (max-width: 560px) { .strip { grid-template-columns: 1fr; } }
-  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-    padding: 14px 16px; box-shadow: var(--shadow); }
-  .tile-label { font-size: 11.5px; font-weight: 600; color: var(--ink-2); margin-bottom: 8px;
-    display: flex; align-items: center; gap: 5px; }
-  .tile-value { font-size: 26px; font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums;
-    letter-spacing: -0.01em; line-height: 1.1; }
-  .tile-value.pos { color: var(--good); } .tile-value.neg { color: var(--bad); }
-  .tile-value.muted-val { color: var(--muted); font-size: 18px; font-weight: 600; }
-  .tile-sub { font-size: 11.5px; color: var(--muted); margin-top: 6px; }
-  .q { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px;
-    border-radius: 50%; background: var(--surface-2); border: 1px solid var(--border-strong);
-    color: var(--muted); font-size: 9px; font-weight: 700; cursor: help; position: relative; outline: none; }
-  .q:hover, .q:focus-visible { color: var(--flame-ink); border-color: var(--flame); }
-  .q::after { content: attr(data-tip); position: absolute; z-index: 50; left: 50%; bottom: calc(100% + 8px);
-    width: min(280px, 75vw); transform: translate(-50%, 4px); padding: 8px 10px; border-radius: 7px;
-    background: var(--ink); color: var(--surface); box-shadow: var(--shadow); font-size: 11px; font-weight: 500;
-    line-height: 1.4; text-align: left; pointer-events: none; opacity: 0; visibility: hidden;
-    transition: opacity .12s, transform .12s, visibility .12s; }
-  .q::before { content: ''; position: absolute; z-index: 51; left: 50%; bottom: calc(100% + 3px);
-    transform: translateX(-50%); border: 5px solid transparent; border-top-color: var(--ink);
-    pointer-events: none; opacity: 0; visibility: hidden; transition: opacity .12s, visibility .12s; }
-  .q:hover::after, .q:focus-visible::after { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
-  .q:hover::before, .q:focus-visible::before { opacity: 1; visibility: visible; }
+  /* the view: records side by side, the one that matters most on the left */
+  .views { display: grid; min-width: 0; min-height: 0; }
+  .view { display: grid; grid-template-columns: minmax(0, 1fr); gap: .75rem; align-content: start; min-width: 0; min-height: 0; }
+  .view[hidden] { display: none; }
+  .card {
+    display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 1rem 1.125rem;
+    background: var(--pane); border: 1px solid var(--line-soft); border-radius: var(--radius-pane);
+  }
+  .card-head { flex: none; margin: 0 0 .75rem; font-size: .9375rem; font-weight: 600; color: var(--ink); }
+  .card { container-type: inline-size; }
+  .card > [id^="frag-"] { flex: 1 1 auto; min-height: 0; overflow: auto; scrollbar-width: thin; }
+  .card.help { display: block; overflow: auto; scrollbar-width: thin; }
+  #frag-recent { max-height: 23.25rem; }
+  @media (min-width: 1100px) {
+    #v-images { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr); }
+    #v-sessions { grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); }
+    #v-setup { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    #v-setup > .card:first-child { grid-column: 1 / -1; }
+  }
+  /* On a screen large enough the page never scrolls: each record scrolls on its own. */
+  @media (min-width: 1100px) and (min-height: 640px) {
+    body { height: 100vh; overflow: hidden; }
+    .view { grid-template-rows: minmax(0, 1fr); align-content: stretch; }
+    #v-setup { grid-template-rows: auto minmax(0, 1fr); }
+    #frag-recent { max-height: none; }
+  }
+  @media (max-width: 1099px) {
+    .ledger { grid-auto-flow: row; grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr)); }
+    .ledger-row { padding: .75rem 1.125rem; }
+  }
+  @media (max-width: 760px) {
+    .wordmark, .switch-state, .theme-label, .hostchip { display: none; }
+    .brand-tip::after { position: fixed; left: .5rem; right: .5rem; top: 3rem; width: auto; }
+    .bar { grid-template-columns: max-content max-content max-content auto auto auto auto; padding-bottom: 2px; overflow-x: auto; scrollbar-width: none; }
+    .brand { margin-right: 0; }
+    .tabs { overflow: visible; }
+    .banner { position: sticky; left: 0; max-width: calc(100vw - 2rem); }
+    .strip { grid-template-columns: minmax(0, 1fr); grid-template-areas: "head" "pipe" "nums"; }
+    .head { border-radius: calc(var(--radius-pane) - 1px) calc(var(--radius-pane) - 1px) 0 0; }
+    .record { flex-direction: column; align-items: stretch; gap: .375rem; padding: .625rem .75rem .75rem; }
+    .gauge-track { flex: none; }
+    .ledger-row { border-left: 0; }
+  }
 
-  /* drawer */
-  .drawer { margin: 0 0 14px; background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
-  .drawer > summary { cursor: pointer; user-select: none; list-style: none; padding: 12px 16px;
-    font-size: 13px; font-weight: 600; color: var(--flame-ink); display: flex; align-items: center; gap: 8px; }
-  .drawer > summary::-webkit-details-marker { display: none; }
-  .drawer > summary::before { content: '▸'; color: var(--flame); font-size: 11px; }
-  .drawer[open] > summary::before { content: '▾'; }
-  .drawer > summary:hover { background: var(--surface-2); }
-  .drawer-intro { padding: 0 16px 10px; font-size: 12px; color: var(--ink-2); }
-  .drawer-intro em { color: var(--flame-ink); font-style: normal; font-weight: 600; }
-  .math-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; padding: 0 16px 16px; }
-  @media (max-width: 860px) { .math-grid { grid-template-columns: 1fr; } }
-  .math-block h4 { margin: 0 0 6px; font-size: 12px; color: var(--ink); }
-  .formula { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
-    padding: 9px 11px; font: 11px/1.55 var(--mono); color: var(--ink-2); white-space: pre-wrap;
-    word-break: break-word; }
-  .formula .k { color: var(--muted); } .formula .v { color: var(--ink); } .formula .op { color: var(--flame); }
-  .formula .sp { height: 6px; }
-  .formula .src { color: var(--muted); font-size: 10px; display: block; margin-top: 7px;
-    border-top: 1px solid var(--border); padding-top: 6px; }
-  .updated { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
-  .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); animation: pulse 2s infinite; }
-  @keyframes pulse { 50% { opacity: 0.35; } }
+  /* formulas */
+  .drawer-intro { max-width: 45rem; margin: 0 0 1rem; font-size: .8125rem; color: var(--muted); }
+  .drawer-intro em { font-style: normal; font-weight: 600; color: var(--ink); }
+  .math-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1.25rem 2rem; }
+  .math-block { min-width: 0; }
+  .math-block h4 { margin: 0 0 .375rem; font-size: .8125rem; font-weight: 600; color: var(--ink); }
+  .formula { padding-top: .5rem; border-top: 1px solid var(--line); font: .71875rem/1.6 var(--mono); color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+  .formula .k { color: var(--faint); }
+  .formula .v { color: var(--ink); }
+  .formula .op { color: var(--accent-ink); }
+  .formula .sp { height: .375rem; }
+  .formula .src { display: block; margin-top: .4375rem; font-size: .6875rem; color: var(--faint); }
 
-  /* sections */
-  .section { margin-top: 26px; }
-  .section-head { font-size: 14px; font-weight: 700; color: var(--ink); margin: 0 0 12px;
-    display: flex; align-items: baseline; gap: 10px; }
-  .section-sub { font-size: 12px; font-weight: 400; color: var(--muted); }
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-    padding: 16px 18px; box-shadow: var(--shadow); min-width: 0; }
-  .card-head { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
-    color: var(--muted); margin: 0 0 12px; }
-  .card-head.spaced { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--border); }
-
-  /* x-ray */
-  .xray { display: grid; grid-template-columns: 1.15fr 1fr; gap: 16px; align-items: start; }
-  @media (max-width: 1000px) { .xray { grid-template-columns: 1fr; } }
-
-  /* context map */
-  .ctxmap { font-size: 13px; }
-  .empty-note { color: var(--muted); font-size: 12.5px; padding: 14px; background: var(--surface-2);
-    border: 1px dashed var(--border-strong); border-radius: 10px; }
-  .ctx-headline { font-size: 13px; color: var(--ink-2); margin-bottom: 10px; }
-  .ctx-title { display: inline-block; font-weight: 700; color: var(--ink); margin-right: 6px; }
-  .ctx-big { font-size: 22px; font-weight: 800; color: var(--flame); font-variant-numeric: tabular-nums; }
-  .legend { display: flex; gap: 8px; margin-bottom: 10px; }
-  .tag { font-size: 11px; font-weight: 600; padding: 3px 9px 3px 22px; border-radius: 999px; position: relative; }
-  .tag::before { content: ''; position: absolute; left: 9px; top: 50%; transform: translateY(-50%);
-    width: 8px; height: 8px; border-radius: 2px; }
-  .tag-img { background: var(--img-tint); color: var(--img-ink); }
-  .tag-img::before { background: var(--img); }
-  .tag-txt { background: var(--txt-tint); color: var(--txt-ink); }
-  .tag-txt::before { background: var(--txt); }
-  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  @media (max-width: 560px) { .split { grid-template-columns: 1fr; } }
-  .split-col { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--surface); }
-  .split-img { border-top: 3px solid var(--img); background: linear-gradient(180deg, var(--img-tint), var(--surface) 40%); }
-  .split-txt { border-top: 3px solid var(--txt); background: linear-gradient(180deg, var(--txt-tint), var(--surface) 40%); }
-  .split-head { font-size: 12px; font-weight: 700; color: var(--ink); margin-bottom: 8px; display: flex;
-    flex-direction: column; gap: 2px; }
-  .split-sum { font-size: 10.5px; font-weight: 600; color: var(--muted); }
-  .ctx-row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; padding: 4px 0;
-    border-bottom: 1px solid var(--border); }
+  /* image vs text breakdown */
+  .ctxmap { font-size: .8125rem; }
+  .empty-note, .evicted { font-size: .8125rem; color: var(--faint); }
+  .ctx-headline { margin-bottom: .75rem; color: var(--muted); }
+  .ctx-title { display: inline-block; margin-right: .375rem; font-weight: 600; color: var(--ink); }
+  .ctx-big { font: 600 .9375rem var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+  .ctx-subnote { font-size: .71875rem; color: var(--faint); }
+  .legend { display: flex; gap: 1rem; margin: .75rem 0; }
+  .tag { position: relative; padding-left: 1rem; font-size: .75rem; color: var(--muted); }
+  .tag::before { content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: .5625rem; height: .5625rem; border-radius: .1875rem; }
+  .tag-img::before { background: var(--tile-saved); }
+  .tag-txt::before { background: var(--tile-quiet); }
+  /* two blocks, each under a filled head in the colour of its tag */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+  @container (max-width: 30rem) { .split { grid-template-columns: 1fr; } }
+  .split-col { min-width: 0; overflow: hidden; padding-bottom: .625rem; background: var(--inset); border-radius: var(--radius); }
+  .split-col > :not(.split-head) { margin-left: .875rem; margin-right: .875rem; }
+  .split-head { display: flex; flex-direction: column; gap: .125rem; margin-bottom: 0; padding: .75rem .875rem 1.75rem; font-size: .875rem; font-weight: 600; color: #fff; }
+  .split-img .split-head { background: linear-gradient(to bottom, transparent 62%, var(--inset)), var(--tile-saved); }
+  .split-txt .split-head { background: linear-gradient(to bottom, transparent 62%, var(--inset)), var(--tile-quiet); }
+  .split-sum { font: .71875rem var(--mono); font-weight: 400; color: rgba(255, 255, 255, .88); }
+  .ctx-row { display: flex; justify-content: space-between; gap: .625rem; padding: .3125rem 0; border-bottom: 1px solid var(--line); font-size: .8125rem; }
   .ctx-row:last-of-type { border-bottom: none; }
-  .ctx-lbl { color: var(--ink-2); } .ctx-val { color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .muted-row { color: var(--muted); font-style: italic; }
-  .split-note { font-size: 10.5px; color: var(--muted); margin-top: 7px; }
-  /* Cap notes explain a turn that compressed less than the user expects, so they
-     must read as a reason, not as fine print. Warm tint, not an error colour —
-     nothing here is broken. */
-  .cap-note { color: var(--ink); border-left: 2px solid var(--flame); padding-left: 7px; }
-  .pages-title { font-size: 11px; color: var(--ink-2); margin: 12px 0 6px; }
-  .pages { display: flex; flex-wrap: wrap; gap: 6px; max-height: 320px; overflow: auto;
-    background: var(--surface-2); padding: 6px; border: 1px solid var(--border); border-radius: 8px; }
-  .page { height: 130px; width: auto; max-width: 230px; object-fit: contain; object-position: top left;
-    image-rendering: pixelated; background: #fff; border: 1px solid var(--border-strong); border-radius: 4px;
-    cursor: pointer; transition: border-color .12s, transform .12s; }
-  .page:hover { border-color: var(--flame); transform: translateY(-1px); }
-  .page.page-gone { width: 150px; height: 56px; background: var(--surface-2); border: 1px dashed var(--border-strong);
-    color: var(--muted); font-size: 10px; cursor: default; }
+  .ctx-lbl { color: var(--muted); }
+  .ctx-val { font-family: var(--mono); font-size: .75rem; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--ink); }
+  .muted-row { color: var(--faint); }
+  .split-note { margin-top: .5rem; font-size: .71875rem; color: var(--faint); }
+  /* Cap notes explain a turn that compressed less than the user expects, so they must read as a
+     reason, not as fine print. */
+  .cap-note { padding-left: .5rem; border-left: 2px solid var(--accent); color: var(--ink); }
+  .pages-title { margin: .875rem 0 .375rem; font-size: .75rem; color: var(--muted); }
+  .pages { display: flex; flex-wrap: wrap; gap: .375rem; }
+  .page {
+    height: 130px; width: auto; max-width: 230px; object-fit: contain; object-position: top left; image-rendering: pixelated;
+    background: #fff; border: 1px solid var(--line-strong); border-radius: var(--radius-small); cursor: pointer; transition: border-color .11s;
+  }
+  .page:hover { border-color: var(--accent); }
+  .page.page-gone { width: 150px; height: 56px; background: transparent; border: 1px dashed var(--line-strong); color: var(--faint); font-size: .6875rem; cursor: default; }
 
-  /* recent requests */
-  .row-view { color: var(--flame-ink); font-weight: 600; text-decoration: none; cursor: pointer; white-space: nowrap; }
+  /* tables */
+  .row-view { color: var(--accent-ink); text-decoration: none; cursor: pointer; white-space: nowrap; }
   .row-view:hover { text-decoration: underline; }
-  table.rtable, table.dtable { width: 100%; border-collapse: collapse; font-size: 12px; }
-  .rtable th, .dtable th { text-align: left; color: var(--muted); font-weight: 600; padding: 7px 8px;
-    border-bottom: 1px solid var(--border-strong); white-space: nowrap; }
-  .rtable td, .dtable td { padding: 7px 8px; border-bottom: 1px solid var(--border);
-    font-variant-numeric: tabular-nums; vertical-align: middle; color: var(--ink-2); }
+  table.rtable, table.dtable { width: 100%; border-collapse: collapse; font-size: .8125rem; }
+  .rtable th, .dtable th { padding: .4375rem .5rem; text-align: left; white-space: nowrap; font-size: .75rem; font-weight: 500; color: var(--faint); border-bottom: 1px solid var(--line); }
+  .rtable td, .dtable td { padding: .4375rem .5rem; vertical-align: middle; font-variant-numeric: tabular-nums; color: var(--muted); border-bottom: 1px solid var(--line-soft); }
+  .rtable th:first-child, .dtable th:first-child, .rtable td:first-child, .dtable td:first-child { padding-left: 0; }
   .rtable tr:last-child td, .dtable tr:last-child td { border-bottom: none; }
-  .rtable tbody tr:hover, .rtable tbody tr:hover { background: var(--surface-2); }
-  /* Keep wide tables inside their card: scroll horizontally rather than
-     pushing the card border out. Fires only when the nowrap columns exceed
-     the card width (narrow x-ray column / small window); no scrollbar when
-     they fit. The table keeps width:100% so it fills at wide widths. */
-  #frag-recent, #frag-stats { overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
-  #frag-recent table, #frag-stats table { min-width: max-content; }
-  #frag-latest { overflow: auto; scrollbar-width: thin; }
+  .rtable tbody tr:hover { background: var(--hover); }
+  /* The request table scrolls inside its record, under a header that stays put. */
+  #frag-recent table { min-width: max-content; }
+  #frag-recent th { position: sticky; top: 0; z-index: 1; background: var(--pane); }
+  #frag-recent th:last-child, #frag-recent td:last-child {
+    position: sticky; right: 0; padding-right: 0; background: var(--cell, var(--pane));
+  }
+  /* columns that scroll under the link fade out instead of being sliced mid-letter */
+  #frag-recent th:last-child::before, #frag-recent td:last-child::before {
+    content: ""; position: absolute; top: 0; bottom: 0; right: 100%; width: 2rem; pointer-events: none;
+    background: linear-gradient(to right, transparent, var(--cell, var(--pane)) 80%);
+  }
+  #frag-recent th:last-child { z-index: 2; }
+  #frag-recent tbody tr:hover td:last-child { --cell: var(--hover); }
+  /* the history is a list of label and value pairs: run it in as many columns as fit, top to
+     bottom, so each value stays next to its label and the width of the record gets used */
+  table.dtable, .dtable tbody { display: block; }
+  .dtable tbody { columns: 3 15rem; column-gap: 2.5rem; }
+  .dtable tr { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; break-inside: avoid; border-bottom: 1px solid var(--line-soft); }
+  .dtable td, .dtable tr:last-child td { padding: .4375rem 0; border-bottom: none; }
+  .dtable td.num { white-space: nowrap; color: var(--ink); font-family: var(--mono); }
   th.num, td.num { text-align: right; }
-  td.pos { color: var(--good); font-weight: 600; }
-  td.neg { color: var(--bad); font-weight: 600; }
-  .endp { color: var(--ink); font-family: var(--mono); font-size: 11px; }
-  .empty-cell { color: var(--muted); text-align: center; padding: 18px; }
-  .pill { display: inline-block; min-width: 38px; text-align: center; font-size: 11px; font-weight: 700;
-    padding: 2px 8px; border-radius: 999px; font-variant-numeric: tabular-nums; }
-  .pill-good { background: var(--good-tint); color: var(--good); }
-  .pill-warn { background: var(--warn-tint); color: var(--warn); }
-  .pill-bad { background: var(--bad-tint); color: var(--bad); }
-  .badge { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
-  .mk-create { font-size: 9.5px; font-weight: 700; color: var(--muted); border: 1px solid var(--muted);
-    border-radius: 999px; padding: 0 5px; margin-left: 4px; vertical-align: 1px; cursor: help; white-space: nowrap; }
-  .badge-img { background: var(--img-tint); color: var(--img-ink); }
-  .badge-txt { background: var(--txt-tint); color: var(--txt-ink); }
+  td.num { font-family: var(--mono); font-size: .75rem; color: var(--ink); }
+  td.pos { font-weight: 600; }
+  td.neg { color: var(--red); font-weight: 600; }
+  .endp { font: .75rem var(--mono); color: var(--ink); }
+  .empty-cell { padding: 1.125rem 0; color: var(--faint); }
+  /* status and "sent as" are plain words: only a failure gets colour */
+  .pill { font: 600 .75rem var(--mono); font-variant-numeric: tabular-nums; }
+  .pill-good { color: var(--muted); }
+  .pill-warn { color: var(--amber); }
+  .pill-bad { color: var(--red); }
+  .badge { font-size: .75rem; }
+  .badge-img { color: var(--accent-ink); }
+  .badge-txt { color: var(--faint); }
+  .mk-create { margin-left: .3125rem; font-size: .6875rem; color: var(--faint); border-bottom: 1px dotted var(--faint); cursor: help; white-space: nowrap; }
 
-  /* inspector */
-  .viewer-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-  .mini-btn { font-size: 11px; background: var(--surface); color: var(--flame-ink); border: 1px solid var(--border-strong);
-    border-radius: 7px; padding: 3px 9px; cursor: pointer; font-weight: 600; }
-  .mini-btn:hover { border-color: var(--flame); }
-  .mini-label { font-size: 11px; color: var(--muted); }
-  .frame { background: #fff; border: 1px solid var(--border-strong); border-radius: 8px; padding: 5px;
-    overflow: auto; max-height: 360px; scrollbar-width: thin; }
+  /* image and source: its buttons share one row with the caption */
+  .viewer-bar { display: flex; align-items: center; gap: .5rem; margin-bottom: .5rem; }
+  .mini-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .75rem; color: var(--faint); }
+  .viewer-caption { margin-bottom: .5rem; font-size: .75rem; color: var(--faint); }
+  .frame { max-height: 22.5rem; overflow: auto; padding: .25rem; background: #fff; border: 1px solid var(--line-strong); border-radius: var(--radius); scrollbar-width: thin; }
   .frame img { display: block; width: auto; height: auto; max-width: none; image-rendering: pixelated; }
-  .frame-sm { max-height: 260px; }
-  .viewer-caption { font-size: 11px; color: var(--muted); margin-top: 8px; display: flex; align-items: center;
-    gap: 10px; flex-wrap: wrap; }
-  .pairing { display: grid; grid-template-columns: 1fr; gap: 10px; margin-top: 10px; }
-  .pair-head { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 6px; display: inline-block;
-    margin-bottom: 6px; }
-  .pair-img { background: var(--img-tint); color: var(--img-ink); }
-  .pair-txt { background: var(--txt-tint); color: var(--txt-ink); }
-  .pair-mid { font-size: 11px; font-weight: 600; color: var(--muted); text-align: center; }
-  .src-pane { margin: 0; max-height: 280px; overflow: auto; background: var(--surface-2);
-    border: 1px solid var(--border); border-radius: 8px; padding: 9px; font: 11px/1.45 var(--mono);
-    white-space: pre-wrap; word-break: break-word; color: var(--ink-2); }
-  .evicted { font-size: 11.5px; color: var(--muted); padding: 12px; background: var(--surface-2);
-    border: 1px dashed var(--border-strong); border-radius: 8px; }
+  .frame-sm { max-height: 16.25rem; }
+  .pairing { display: grid; grid-template-columns: 1fr; gap: .625rem; }
+  .pair-col { min-width: 0; }
+  .pair-head { display: inline-block; margin-bottom: .375rem; font-size: .75rem; font-weight: 600; }
+  .pair-img { color: var(--accent-ink); }
+  .pair-txt { color: var(--muted); }
+  .pair-mid { font-size: .75rem; color: var(--faint); text-align: center; }
+  .src-pane {
+    margin: 0; max-height: 17.5rem; overflow: auto; padding: .5625rem .625rem;
+    background: var(--inset); border: 1px solid var(--line); border-radius: var(--radius);
+    font: .71875rem/1.45 var(--mono); color: var(--muted); white-space: pre-wrap; word-break: break-word;
+  }
 
-  /* sessions bars */
-  .status { margin-bottom: 12px; color: var(--muted); font-size: 12px; }
-  .bars { display: flex; flex-direction: column; gap: 8px; }
-  .bar-row { display: flex; align-items: center; gap: 12px; font-size: 12px; }
-  .bar-label { width: 150px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    color: var(--ink); font-family: var(--mono); font-size: 11px; }
-  .bar-track { flex: 1; min-width: 0; height: 16px; background: var(--surface-2); border-radius: 5px;
-    overflow: hidden; border: 1px solid var(--border); }
-  .bar-fill { height: 100%; border-radius: 5px 0 0 5px;
-    background: linear-gradient(90deg, #ffa766, var(--flame)); }
-  .bar-val { width: 78px; flex: none; text-align: right; font-variant-numeric: tabular-nums;
-    color: var(--flame-ink); font-weight: 600; }
-  .bar-val.neg { color: var(--bad); }
-  .axis { margin-top: 12px; color: var(--muted); font-size: 11px; }
-  .empty { text-align: center; color: var(--muted); padding: 22px; font-size: 12px; }
+  /* sessions: a row per session, a bar for its share */
+  .status { margin-bottom: .5rem; font-size: .8125rem; color: var(--faint); }
+  .bars { display: flex; flex-direction: column; }
+  .bar-row { display: flex; align-items: center; gap: .875rem; padding: .4375rem 0; border-bottom: 1px solid var(--line-soft); font-size: .8125rem; }
+  .bar-row:last-child { border-bottom: 0; }
+  .bar-label { flex: none; width: 9.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: .75rem var(--mono); color: var(--muted); }
+  .bar-track { flex: 1; min-width: 0; height: .5rem; border-radius: .25rem; background: var(--inset); }
+  .bar-fill { height: 100%; border-radius: .25rem; background: var(--tile-saved); }
+  .bar-val { flex: none; width: 6rem; text-align: right; font: 600 .75rem var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+  .bar-val.neg { color: var(--red); }
+  .axis { margin-top: .625rem; font-size: .75rem; color: var(--faint); }
+  .empty { padding: .875rem 0; font-size: .8125rem; color: var(--faint); }
+
+  /* setup: every model is a key in one row that scrolls sideways when it runs out of width */
+  .chips {
+    display: flex; align-items: center; gap: .5rem; padding: 2px 2rem .625rem 2px; overflow-x: auto; scrollbar-width: thin;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
+  }
+  .chip-group { display: contents; }
+  .chip-group + .chip-group .models-label { margin-left: 1rem; }
+  .chip { padding: .5625rem 1rem; font-size: .9375rem; }
+  .chip.on { color: #fff; background: var(--tile-saved); border-color: transparent; }
+  .models { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: .75rem 0 0; }
+  .models-label { flex: none; font-size: .9375rem; font-weight: 600; white-space: nowrap; color: var(--ink); }
+  .models-csv { flex: 1 1 16rem; min-width: 13.75rem; padding: .3125rem .625rem; background: var(--inset); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); font: .8125rem/1.4 var(--mono); }
+  .models-csv:focus { outline: none; border-color: var(--accent); }
+  .models-routing { margin-top: .75rem; }
+  .help p, .help li { max-width: 45rem; margin: .5rem 0; font-size: .8125rem; line-height: 1.55; color: var(--muted); }
+  .help ul { margin: .375rem 0; padding-left: 1.125rem; }
 
   /* toast tray */
-  .tray { position: fixed; bottom: 16px; right: 16px; display: flex; flex-direction: column; gap: 8px;
-    z-index: 1000; pointer-events: none; }
-  .toast { background: var(--surface); color: var(--bad); border: 1px solid #f0b3ab; border-radius: 9px;
-    padding: 10px 14px; font-size: 12px; box-shadow: 0 8px 24px rgba(60,35,15,.14); display: flex;
-    align-items: center; gap: 12px; pointer-events: auto; max-width: 360px; }
-  .toast button { background: transparent; color: inherit; border: 0; cursor: pointer; font-size: 16px;
-    line-height: 1; padding: 0; }
+  .tray { position: fixed; bottom: 1rem; right: 1rem; z-index: 1000; display: flex; flex-direction: column; gap: .5rem; pointer-events: none; }
+  .toast { display: flex; align-items: center; gap: .75rem; max-width: 22.5rem; padding: .625rem .875rem; background: var(--raise); color: var(--red); border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: var(--float); font-size: .8125rem; pointer-events: auto; }
+  .toast button { padding: 0; background: transparent; color: inherit; border: 0; font-size: 1rem; line-height: 1; cursor: pointer; }
+  .toast[hidden] { display: none; }
+  body.pp-offline > :not(.tray) { opacity: .45; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 `;
 
 // Client glue: window.pp (pin+source state) → hx-vals; preserves <details> open state across swaps; routes htmx errors to toast tray.
@@ -1210,11 +1302,49 @@ const GLUE_JS = `
       detail: { text: ev.detail.xhr.status + ' ' + ev.detail.requestConfig.path }
     }));
   });
-  document.body.addEventListener('htmx:sendError', function (ev) {
-    window.dispatchEvent(new CustomEvent('pp-toast', {
-      detail: { text: 'proxy unreachable: ' + ev.detail.requestConfig.path }
-    }));
+  // Proxy down: one persistent banner instead of a toast per failed poll. Polls are cancelled while offline; a single probe retries every 3s and reloads the page once the proxy answers again (a restart may have shipped a new build).
+  window.ppOffline = false;
+  function ppProbe() {
+    fetch('/api/compression', { cache: 'no-store' }).then(function () {
+      location.reload();
+    }, function () { setTimeout(ppProbe, 3000); });
+  }
+  document.body.addEventListener('htmx:beforeRequest', function (ev) {
+    if (window.ppOffline) ev.preventDefault();
   });
+  document.body.addEventListener('htmx:sendError', function () {
+    if (window.ppOffline) return;
+    window.ppOffline = true;
+    document.body.classList.add('pp-offline');
+    const b = document.getElementById('pp-offline');
+    if (b) b.hidden = false;
+    setTimeout(ppProbe, 3000);
+  });
+  // One view at a time. The choice survives reloads (the offline probe reloads the page when the proxy returns).
+  var ppViewName = 'images';
+  var ppAdvOpen = false;
+  function ppView(name) {
+    ppViewName = name;
+    document.querySelectorAll('.view').forEach(function (v) { v.hidden = !ppAdvOpen || v.id !== 'v-' + name; });
+    document.querySelectorAll('.tab').forEach(function (b) {
+      b.setAttribute('aria-pressed', b.dataset.view === name ? 'true' : 'false');
+    });
+    try { localStorage.setItem('pp-view', name); } catch (e) {}
+  }
+  // Everything under the saving is Advanced: closed until asked for, and a closed view does not poll.
+  function ppAdvanced(open) {
+    ppAdvOpen = open === undefined ? !ppAdvOpen : open;
+    document.querySelector('.tabs').hidden = !ppAdvOpen;
+    document.getElementById('adv-btn').setAttribute('aria-expanded', ppAdvOpen ? 'true' : 'false');
+    try { localStorage.setItem('pp-adv', ppAdvOpen ? '1' : '0'); } catch (e) {}
+    ppView(ppViewName);
+  }
+  (function () {
+    var saved = null, adv = null;
+    try { saved = localStorage.getItem('pp-view'); adv = localStorage.getItem('pp-adv'); } catch (e) {}
+    if (saved && document.getElementById('v-' + saved)) ppViewName = saved;
+    if (adv === '1') ppAdvanced(true);
+  })();
 `;
 
 // Theme: light/dark via data-theme on <html>; saved in localStorage, defaults to system pref.
@@ -1224,8 +1354,7 @@ const THEME_JS = `
       document.documentElement.dataset.theme = t;
       var b = document.getElementById('theme-btn');
       if (b) {
-        b.textContent = t === 'dark' ? '☀ Light' : '☾ Dark';
-        b.setAttribute('aria-label', t === 'dark' ? 'Switch to light mode' : 'Switch to dark mode');
+        b.setAttribute('aria-checked', t === 'dark' ? 'true' : 'false');
       }
     }
     window.ppTheme = function () {
@@ -1249,7 +1378,7 @@ export function renderPage(port: number, hostLabel = ''): string {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${host ? `${host} · pxpipe dashboard` : 'pxpipe — live dashboard'}</title>
+<title>${host ? `${host} · fastpipe dashboard` : 'fastpipe — live dashboard'}</title>
 <link rel="icon" href="${FAVICON}" />
 <style>${CSS}</style>
 <script>
@@ -1265,104 +1394,112 @@ export function renderPage(port: number, hostLabel = ''): string {
 </head>
 <body>
 
-<header class="topbar">
+<header class="bar">
   <div class="brand">
-    <span class="flame-dot"></span>
-    <div>
-      <div class="wordmark-row">
-        <div class="wordmark">pxpipe</div>
-        ${host ? `<span class="hostchip" title="proxy host">${host}</span>` : ''}
-      </div>
-      <div class="tagline">See exactly what got turned into images to shrink your Claude Code bill.</div>
-    </div>
+    ${LOGO}
+    <h1 class="wordmark">fastpipe</h1>
+    <span class="q brand-tip" tabindex="0" role="note" aria-label="Which models image compression is validated for" data-tip="Image compression is validated for Fable 5, Gemini 3.6 Flash and Gemini 3.7 Flash. Other families can use more tokens. Opt in only for deliberate experiments.">?</span>
+    ${host ? `<span class="hostchip" title="proxy host">${host}</span>` : ''}
   </div>
-  <div class="controls">
-    <button type="button" id="theme-btn" class="theme-btn" onclick="ppTheme()" aria-label="Toggle dark mode" title="Toggle dark / light mode">☾ Dark</button>
-    <div id="frag-toggle" hx-get="/fragments/toggle" hx-trigger="load, every 2s" hx-swap="innerHTML"></div>
-  </div>
+  <button class="mini-btn adv-btn" type="button" id="adv-btn" aria-expanded="false" aria-controls="advanced" onclick="ppAdvanced()">Advanced</button>
+  <nav class="tabs" aria-label="Views" hidden>
+    <button class="tab" type="button" data-view="images" aria-pressed="true" onclick="ppView('images')">Images</button>
+    <button class="tab" type="button" data-view="sessions" aria-pressed="false" onclick="ppView('sessions')">Sessions</button>
+    <button class="tab" type="button" data-view="setup" aria-pressed="false" onclick="ppView('setup')">Setup</button>
+    <button class="tab" type="button" data-view="math" aria-pressed="false" onclick="ppView('math')">Math</button>
+  </nav>
+  <div id="frag-toggle" hx-get="/fragments/toggle" hx-trigger="load, every 2s" hx-swap="innerHTML"></div>
+  <span class="theme-label">Dark</span>
+  <button type="button" id="theme-btn" class="theme-btn" role="switch" aria-checked="false" aria-label="Dark theme" title="Dark theme" onclick="ppTheme()"></button>
 </header>
 
-<details class="models-collapse">
-  <summary class="models-summary">Connect an agent <span class="hint">warp launches any CLI through this proxy · pin keeps instructions last in the request</span></summary>
-  <p>Warp starts the agent with the proxy already wired, no env or config edits:</p>
-  <pre>pxpipe warp -- claude
-pxpipe warp -- codex
-pxpipe warp -- cursor-agent</pre>
-  <p>Aliases work too (<code>pxpipe warp -- pp</code>), and <code>--route PATTERN=http://host:port</code> adds routes beyond <code>api.anthropic.com</code> (a PATTERN that names a port matches only that port, e.g. <code>--route '127.0.0.1:9090/v1/*=http://127.0.0.1:${port}'</code> warps an agent pointed at another local proxy). Without warp, point the agent at <code>ANTHROPIC_BASE_URL=http://127.0.0.1:${port}</code> yourself.</p>
-  <p>Pin instructions from inside the session — they get moved to the end of every request, where the model actually reads them:</p>
-  <pre>@pxpipe pin be concise, no walls of text
+<div class="strip">
+  <div id="frag-session" hx-get="/fragments/session-summary" hx-trigger="load, every 2s" hx-swap="innerHTML">
+    <div class="gauge gauge-empty"><header class="head"><h2 class="head-title">Connecting…</h2></header><div class="record"><div class="gauge-track"></div></div></div>
+  </div>
+  <div id="frag-header" hx-get="/fragments/header" hx-select=".numbers" hx-trigger="load, every 2s" hx-swap="innerHTML"></div>
+</div><!-- /strip -->
+
+<!-- Advanced: closed until its button is pressed. One view at a time, picked in the bar; a view that is not showing loads once and then stops polling. -->
+<main class="views" id="advanced">
+<section class="view" id="v-images" hidden>
+  <div class="card">
+    <h3 class="card-head">Recent requests</h3>
+    <div id="frag-recent" hx-get="/fragments/recent" hx-trigger="load, every 2s [!document.getElementById('v-images').hidden]" hx-swap="innerHTML"></div>
+  </div>
+  <div class="card">
+    <h3 class="card-head">Image vs text breakdown</h3>
+    <div id="frag-context-map" hx-get="/fragments/context-map" hx-trigger="load" hx-swap="innerHTML"></div>
+  </div>
+  <div class="card">
+    <h3 class="card-head">Image and source</h3>
+    <div id="frag-latest" hx-get="/fragments/latest" hx-trigger="load, every 2s [!document.getElementById('v-images').hidden], pp-refresh" hx-swap="innerHTML"
+         hx-vals='js:{pin: window.pp.pin == null ? "" : window.pp.pin, source: window.pp.src ? "1" : ""}'></div>
+  </div>
+</section><!-- /v-images -->
+
+<section class="view" id="v-sessions" hidden>
+  <div class="card">
+    <h3 class="card-head">Top sessions</h3>
+    <div id="frag-sessions" hx-get="/fragments/sessions" hx-trigger="load, every 5s [!document.getElementById('v-sessions').hidden]" hx-swap="innerHTML"></div>
+  </div>
+  <div class="card">
+    <h3 class="card-head">Full history</h3>
+    <div id="frag-stats" hx-get="/fragments/stats" hx-trigger="load, every 5s [!document.getElementById('v-sessions').hidden]" hx-swap="innerHTML"></div>
+  </div>
+</section><!-- /v-sessions -->
+
+<section class="view" id="v-setup" hidden>
+  <div class="card">
+    <h3 class="card-head">Image model scope</h3>
+    <div id="frag-models" hx-get="/fragments/models" hx-trigger="load, every 2s [!document.getElementById('v-setup').hidden && (!document.activeElement || document.activeElement.id !== 'models-csv')]" hx-swap="innerHTML"></div>
+    <p class="hint models-routing">This list only decides which models get images. Non-Anthropic IDs also need the routing settings described below.</p>
+  </div>
+  <div class="card help">
+    <h3 class="card-head">Connect an agent</h3>
+    <p>Warp starts the agent with the proxy already wired, no env or config edits:</p>
+    <pre>fastpipe warp -- claude
+fastpipe warp -- codex
+fastpipe warp -- cursor-agent</pre>
+    <p>Aliases work too (<code>fastpipe warp -- pp</code>), and <code>--route PATTERN=http://host:port</code> adds routes beyond <code>api.anthropic.com</code> (a PATTERN that names a port matches only that port, e.g. <code>--route '127.0.0.1:9090/v1/*=http://127.0.0.1:${port}'</code> warps an agent pointed at another local proxy). Without warp, point the agent at <code>ANTHROPIC_BASE_URL=http://127.0.0.1:${port}</code> yourself.</p>
+    <p>Pin instructions from inside the session — they get moved to the end of every request, where the model actually reads them:</p>
+    <pre>@pxpipe pin be concise, no walls of text
 @pxpipe unpin 2
 @pxpipe unpin all</pre>
-  <p><code>@pxpipe pin</code> with no text lists what is pinned.</p>
-  <p>A <code>@pxpipe pin …</code> line in your global or project <code>CLAUDE.md</code> (<code>AGENTS.md</code> under Codex / OpenCode) is relocated the same way, on every session, with no typing. Those are file-backed, so <code>unpin</code> and <code>unpin all</code> never touch them — edit the file to remove one.</p>
-</details>
-
-<details class="models-collapse">
-  <summary class="models-summary">Image model scope <span class="hint">Fable 5, Gemini 3.6 Flash, and Gemini 3.7 Flash by default · expand to experiment with other families</span></summary>
-  <div class="models-warning">⚠ Image compression is validated for Fable 5, Gemini 3.6 Flash, and Gemini 3.7 Flash — other families can use <strong>more</strong> tokens, not less. Opt in only for deliberate experiments.</div>
-  <div id="frag-models" hx-get="/fragments/models" hx-trigger="load, every 2s [!document.activeElement || document.activeElement.id !== 'models-csv']" hx-swap="innerHTML"></div>
-  <div class="models-routing"><span class="hint">imaging scope ≠ provider routing — non-Anthropic IDs also need routing env on the proxy</span> <button class="mini-btn" type="button" onclick="document.getElementById('routing-help').showModal()">routing help</button></div>
-</details>
-
-<dialog id="routing-help" onclick="if (event.target === this) this.close()">
-  <h3>Routing Claude Code to OpenAI / Cloudflare models</h3>
-  <p>Claude models use Anthropic by default. Two optional routes can run together — set on the <strong>pxpipe process</strong> (keep provider credentials out of Claude Code):</p>
-  <ul>
-    <li><code>OPENAI_MODELS</code> — exact model IDs routed to OpenAI Responses (<code>OPENAI_UPSTREAM</code> + <code>OPENAI_API_KEY</code>)</li>
-    <li><code>CLOUDFLARE_MODELS</code> — exact model IDs routed to Cloudflare's OpenAI-compatible endpoint (<code>CLOUDFLARE_ACCOUNT_ID</code> + <code>CLOUDFLARE_API_TOKEN</code>)</li>
-  </ul>
-  <p>If a model appears in both lists: <code>CLOUDFLARE_MODELS &gt; OPENAI_MODELS &gt; default routing</code>.</p>
-  <pre>OPENAI_UPSTREAM=https://api.openai.com \\
+    <p><code>@pxpipe pin</code> with no text lists what is pinned.</p>
+    <p>A <code>@pxpipe pin …</code> line in your global or project <code>CLAUDE.md</code> (<code>AGENTS.md</code> under Codex / OpenCode) is relocated the same way, on every session, with no typing. Those are file-backed, so <code>unpin</code> and <code>unpin all</code> never touch them — edit the file to remove one.</p>
+  </div>
+  <div class="card help">
+    <h3 class="card-head">Routing Claude Code to OpenAI / Cloudflare models</h3>
+    <p>Claude models use Anthropic by default. Two optional routes can run together — set on the <strong>fastpipe process</strong> (keep provider credentials out of Claude Code):</p>
+    <ul>
+      <li><code>OPENAI_MODELS</code> — exact model IDs routed to OpenAI Responses (<code>OPENAI_UPSTREAM</code> + <code>OPENAI_API_KEY</code>)</li>
+      <li><code>CLOUDFLARE_MODELS</code> — exact model IDs routed to Cloudflare's OpenAI-compatible endpoint (<code>CLOUDFLARE_ACCOUNT_ID</code> + <code>CLOUDFLARE_API_TOKEN</code>)</li>
+    </ul>
+    <p>If a model appears in both lists: <code>CLOUDFLARE_MODELS &gt; OPENAI_MODELS &gt; default routing</code>.</p>
+    <pre>OPENAI_UPSTREAM=https://api.openai.com \\
 OPENAI_API_KEY=your-openai-key \\
 OPENAI_MODELS=gpt-5.6-sol \\
 CLOUDFLARE_ACCOUNT_ID=your-account-id \\
 CLOUDFLARE_API_TOKEN=your-cloudflare-token \\
 CLOUDFLARE_MODELS=moonshotai/kimi-k3 \\
 npx pxpipe-proxy</pre>
-  <p>Non-Anthropic IDs are advertised with a <code>claude-</code> prefix because Claude Code needs a Claude-shaped ID; pxpipe strips it before forwarding. Switch to one inside Claude Code with <code>/model claude-&lt;model&gt;</code> — e.g. <code>/model claude-moonshotai/kimi-k3</code> — or launch with <code>claude --model claude-moonshotai/kimi-k3</code>. Verify discovery with <code>curl …/v1/models</code>.</p>
-  <p><code>PXPIPE_MODELS</code> above is separate: it controls image compression, not routing. Kimi K3 on Cloudflare is the only non-Anthropic model tested end to end — see <code>docs/CLAUDE_CODE_PROVIDER_ROUTING.md</code>.</p>
-  <button class="mini-btn" type="button" onclick="this.closest('dialog').close()">close</button>
-</dialog>
-
-<div id="frag-session" hx-get="/fragments/session-summary" hx-trigger="load, every 2s" hx-swap="innerHTML">
-  <div class="hero hero-empty"><div class="hero-headline">Connecting…</div></div>
-</div>
-
-<div id="frag-header" hx-get="/fragments/header" hx-trigger="load, every 2s" hx-swap="innerHTML"></div>
-
-<section class="section">
-  <h2 class="section-head">What happened to your context <span class="section-sub">click a request to see image vs text</span></h2>
-  <div class="xray">
-    <div class="card">
-      <h3 class="card-head">Recent requests</h3>
-      <div id="frag-recent" hx-get="/fragments/recent" hx-trigger="load, every 2s" hx-swap="innerHTML"></div>
-    </div>
-    <div class="card">
-      <h3 class="card-head">Image vs text breakdown</h3>
-      <div id="frag-context-map" hx-get="/fragments/context-map" hx-trigger="load" hx-swap="innerHTML"></div>
-      <h3 class="card-head spaced">Image ↔ source inspector</h3>
-      <div id="frag-latest" hx-get="/fragments/latest" hx-trigger="load, every 2s, pp-refresh" hx-swap="innerHTML"
-           hx-vals='js:{pin: window.pp.pin == null ? "" : window.pp.pin, source: window.pp.src ? "1" : ""}'></div>
-    </div>
+    <p>Non-Anthropic IDs are advertised with a <code>claude-</code> prefix because Claude Code needs a Claude-shaped ID; fastpipe strips it before forwarding. Switch to one inside Claude Code with <code>/model claude-&lt;model&gt;</code> — e.g. <code>/model claude-moonshotai/kimi-k3</code> — or launch with <code>claude --model claude-moonshotai/kimi-k3</code>. Verify discovery with <code>curl …/v1/models</code>.</p>
+    <p><code>PXPIPE_MODELS</code> above is separate: it controls image compression, not routing. Kimi K3 on Cloudflare is the only non-Anthropic model tested end to end — see <code>docs/CLAUDE_CODE_PROVIDER_ROUTING.md</code>.</p>
   </div>
-</section>
+</section><!-- /v-setup -->
 
-<section class="section">
-  <h2 class="section-head">Top sessions <span class="section-sub">by tokens saved</span></h2>
+<section class="view" id="v-math" hidden>
   <div class="card">
-    <div id="frag-sessions" hx-get="/fragments/sessions" hx-trigger="load, every 5s" hx-swap="innerHTML"></div>
+    <h3 class="card-head">How each number is computed</h3>
+    <div id="frag-math" hx-get="/fragments/header" hx-select=".math" hx-trigger="load, every 2s [!document.getElementById('v-math').hidden]" hx-swap="innerHTML"></div>
   </div>
-</section>
-
-<section class="section">
-  <h2 class="section-head">Full history <span class="section-sub">every event on disk</span></h2>
-  <div class="card">
-    <div id="frag-stats" hx-get="/fragments/stats" hx-trigger="load, every 5s" hx-swap="innerHTML"></div>
-  </div>
-</section>
+</section><!-- /v-math -->
+</main>
 
 <div class="tray" x-data="{ toasts: [], next: 1 }"
-     @pp-toast.window="const id = next++; toasts.push({ id, text: $event.detail.text }); setTimeout(() => toasts = toasts.filter(t => t.id !== id), 5000)">
+     @pp-toast.window="if (toasts.some(t => t.text === $event.detail.text)) return; const id = next++; toasts.push({ id, text: $event.detail.text }); setTimeout(() => toasts = toasts.filter(t => t.id !== id), 5000)">
+  <div id="pp-offline" class="toast" role="status" hidden>proxy offline - retrying every 3s, the page reloads when it is back</div>
   <template x-for="t in toasts" :key="t.id">
     <div class="toast"><span x-text="t.text"></span><button type="button" @click="toasts = toasts.filter(x => x.id !== t.id)" aria-label="dismiss">&times;</button></div>
   </template>
