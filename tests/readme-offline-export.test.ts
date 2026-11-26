@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 
-const README_PATH = 'README.md';
+// The upstream README, where this section lives, is kept as docs/pxpipe.md.
+const README_PATH = 'docs/pxpipe.md';
 const OFFLINE_EXPORT_HEADING = '## Offline export (no proxy)';
 const REQUIRED_OFFLINE_EXPORT_TEXT = [
   'pxpipe export',

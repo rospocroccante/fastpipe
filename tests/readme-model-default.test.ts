@@ -19,9 +19,10 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_MODEL_BASES } from '../src/core/applicability.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const readme = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
+// The fork's README and the upstream guide kept in docs/ both state the default.
+describe.each(['README.md', 'docs/pxpipe.md'])('%s model scope', (file) => {
+  const readme = fs.readFileSync(path.join(repoRoot, file), 'utf8');
 
-describe('README model scope', () => {
   it('states exactly one zero-config default', () => {
     const matches = readme.match(/default `PXPIPE_MODELS=([^`]+)`/g) ?? [];
     expect(matches).toHaveLength(1);

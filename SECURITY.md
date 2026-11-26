@@ -42,6 +42,14 @@ configured without this shared secret. Do not enable
 `PXPIPE_DEBUG_CAPTURE_4XX` in production: captured request bodies can contain
 prompts and credentials.
 
+The `fastpipe` launcher (`scripts/fastpipe-ctl.mjs`) starts the local service
+with this capture off. To debug a failing request, run
+`FASTPIPE_DEBUG_CAPTURE_4XX=1 fastpipe on`, reproduce the failure, then run
+`fastpipe on` again to turn capture back off. Each captured file holds the whole
+conversation of one refused request, including any secret that appeared in it,
+and is written to `~/.fastpipe/4xx-bodies`. Delete the files once the problem is
+understood.
+
 Telemetry, diagnostic captures, rendered PNG dumps, configuration files, and
 export artifacts are protected with owner-only permissions on POSIX systems.
 
