@@ -6,6 +6,11 @@ behavioral changes, patch = fixes).
 
 ## Unreleased
 
+### Merged from pxpipe main
+- **Request bodies up to 64 MiB on loopback; larger ones stream through as text** instead of a 413. A non-loopback `HOST` keeps 16 MiB and refuses past it. This replaces the fork's 32 MiB default. `PXPIPE_MAX_REQUEST_BYTES` still overrides.
+- Schema stripping no longer deletes `dependentRequired`, `dependentSchemas` and `dependencies` entries named `description`, `title`, `default` or `examples`.
+- Eval results for Gemini 4 Neon, Carbon and Hydrogen, and GPT 6.2 Astra and Sol.
+
 ### Changed
 - **The dashboard reads top to bottom.** Three containers at the top (input tokens saved or added, money saved or wasted against what the same requests cost as text, cost per request), the saving bar, a row of model switches, then the recent requests with the images sent beside them. Each number appears once.
 - **Advanced is a section under the main screen**, reached by scrolling, with four tabs: Breakdown, Sessions, Setup and Math. The Advanced button is gone.

@@ -98,9 +98,8 @@ fastpipe direct    # one Claude Code session straight to Anthropic
 
 - Palette PNGs, cached base64 and factsheet, pages rendered in parallel. Same pixels.
 - `fastpipe on` and `fastpipe off`, with a watchdog and a pause switch.
-- One-screen dashboard.
+- Dashboard: saving, money, cost per request, the images sent.
 - One retry on a dropped connection.
-- Request bodies up to 32 MiB, up from 16. `PXPIPE_MAX_REQUEST_BYTES` overrides.
 - Tool changes survive history collapse. No more `tool_reference_unresolved`.
 - Refused requests are not written to disk. `FASTPIPE_DEBUG_CAPTURE_4XX=1 fastpipe on` turns capture on.
 - Listens on `127.0.0.1`. Data stays in `~/.fastpipe`.
