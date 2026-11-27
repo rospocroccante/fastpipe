@@ -287,7 +287,7 @@ export function renderSessionSummaryFragment(s: StatsPayload): string {
         `<span title="${escapeHtml(usdFmt(usd))}">${bigUsd(usd)}</span>`,
         usd < 0 ? 'wasted' : 'saved',
         `<b>${usdFmt(spent)}</b> spent vs <b>${usdFmt(without)}</b> without fastpipe${unpricedNote}`,
-        usd < 0 ? 'neg' : 'pos',
+        usd < 0 ? 'neg' : usd > 0 ? 'pos' : 'none',
       )
     : kpi('Money', '—', 'no dollars', 'No provider pricing for these requests.', 'none');
 
@@ -303,7 +303,7 @@ export function renderSessionSummaryFragment(s: StatsPayload): string {
         `$${cAvg.toFixed(cAvg >= 1 ? 2 : 4)}`,
         costDelta === 0 ? 'same as text' : `${costDelta < 0 ? '−' : '+'}${Math.abs(costDelta)}% vs text`,
         `<b>$${withoutAvg.toFixed(withoutAvg >= 1 ? 2 : 4)}</b> per request as text`,
-        cAvg <= withoutAvg ? 'pos' : 'neg',
+        costDelta === 0 ? 'none' : cAvg < withoutAvg ? 'pos' : 'neg',
       )
     : kpi('Cost per request', '—', 'no dollars', 'Shows once an imaged request has provider pricing.', 'none');
 
@@ -312,7 +312,7 @@ export function renderSessionSummaryFragment(s: StatsPayload): string {
     compared ? `${Math.abs(inputPct).toFixed(0)}%` : '—',
     !compared ? 'not measured yet' : loss ? 'more than as text' : 'fewer than as text',
     `<b>${numFmt(measured)}</b> of ${numFmt(s.requests ?? measured)} requests sent as images, after cache discounts`,
-    loss ? 'neg' : 'pos',
+    !compared || Math.round(inputPct) === 0 ? 'none' : loss ? 'neg' : 'pos',
   );
 
   return (
@@ -685,7 +685,7 @@ export function renderRecentFragment(p: RecentPayload): string {
             const viewId = (e.img_ids ?? (e.img_id != null ? [e.img_id] : []))[0];
             const viewLink =
               viewId != null
-                ? `<a class="row-view" href="#" hx-get="/fragments/context-map?req=${viewId}" hx-target="#frag-context-map" hx-swap="innerHTML" onclick="ppPin(${viewId});ppView('breakdown')">Details →</a>`
+                ? `<a class="row-view" href="#" hx-get="/fragments/context-map?req=${viewId}" hx-target="#frag-context-map" hx-swap="innerHTML" onclick="ppPin(${viewId});ppView('breakdown');ppAdv(true)">Details →</a>`
                 : `<span class="muted">—</span>`;
             const saved = e.session_saved_so_far_delta;
             // A loss that disappears when the newly written prefix is repriced at
@@ -701,18 +701,20 @@ export function renderRecentFragment(p: RecentPayload): string {
             const createNote = createLoss
               ? ` <span class="mk-create" title="Cache-create turn: this loss is the one-time ${CACHE_CREATE_RATE}× premium for writing ${numFmt(cc)} tokens to cache. Later turns re-read that prefix at ${CACHE_READ_RATE}×, which typically recoups it.">create</span>`
               : '';
+            // The figure and a word that says which way it went, so nobody has to read a sign.
             const savedCell = saved == null
-              ? `<td class="num muted">—</td>`
+              ? `<td class="num muted">—<span class="tok-word">not measured</span></td>`
               : saved > 0
-                ? `<td class="num pos">${numFmt(saved)}</td>`
+                ? `<td class="num pos">+${numFmt(saved)}<span class="tok-word">saved</span></td>`
                 : saved < 0
-                  ? `<td class="num neg">${numFmt(saved)}${createNote}</td>`
-                  : `<td class="num">0</td>`;
+                  ? `<td class="num neg">−${numFmt(-saved)}<span class="tok-word">wasted</span>${createNote}</td>`
+                  : `<td class="num even">0<span class="tok-word">not saved</span></td>`;
+            const verdict = saved == null || saved === 0 ? 'r-even' : saved > 0 ? 'r-pos' : 'r-neg';
             const imaged = e.cc_added
               ? `<span class="badge badge-img">image</span>`
               : `<span class="badge badge-txt">text</span>`;
             return (
-              `<tr>` +
+              `<tr class="${verdict}">` +
               savedCell +
               `<td>${e.model ? `<code>${escapeHtml(e.model)}</code>` : '<span class="muted">—</span>'}</td>` +
               `<td>${imaged}</td>` +
@@ -729,7 +731,7 @@ export function renderRecentFragment(p: RecentPayload): string {
   return (
     `<table class="rtable"><thead><tr>` +
     // Columns run from the one that matters most to the one that matters least; the link stays in view.
-    `<th class="num" title="As-text minus Sent; negative means imaging cost more">Saved/lost</th>` +
+    `<th class="num" title="As-text minus Sent; wasted means imaging cost more than plain text">Saved / wasted</th>` +
     `<th>Model</th>` +
     `<th title="Was this request's context compressed into an image?">Sent as</th>` +
     `<th class="num" title="Billing-equivalent input if kept as plain text, after cache create/read rates">As text</th>` +
@@ -757,19 +759,30 @@ export function renderLatestFragment(inp: LatestFragmentInput): string {
   const meta = payload.preview_meta ?? '';
   const imageIds = payload.image_ids ?? [];
   const pinnedEvicted = pin != null && !imageIds.includes(pin);
+  const gallery = payload.images ?? [];
+  // An image the gallery knows gets a stamped address the browser may cache.
+  const stamped = (id: number): string | null => {
+    const g = gallery.find((im) => im.id === id);
+    return g ? `/proxy-latest-png?id=${g.id}&t=${Math.round(g.ts * 1000)}` : null;
+  };
 
   // Pinned id, or latest (cache-busted by meta).
   const imgSrc =
     pin != null
-      ? `/proxy-latest-png?id=${pin}`
-      : `/proxy-latest-png?t=${encodeURIComponent(meta)}`;
+      ? (stamped(pin) ?? `/proxy-latest-png?id=${pin}`)
+      : gallery[0]
+        ? stamped(gallery[0].id)!
+        : `/proxy-latest-png?t=${encodeURIComponent(meta)}`;
 
   let main: string;
   if (pin != null && pinnedEvicted) {
     main = `<div class="evicted">image #${pin} is no longer in the buffer</div>`;
   } else if (pin != null || hasPreview) {
     // When source pane is open the image appears inside the pairing — don't duplicate it.
-    main = showSource ? '' : `<div class="frame"><img src="${imgSrc}" alt="rendered page" /></div>`;
+    // Fitted to the card so the whole page shows; a click opens it at full size in a new tab.
+    main = showSource
+      ? ''
+      : `<div class="frame"><a href="${imgSrc}" target="_blank" rel="noopener" title="Open at full size"><img src="${imgSrc}" alt="rendered page" /></a></div>`;
   } else {
     main = `<div class="empty-note">No images yet — they appear the instant fastpipe compresses a request.</div>`;
   }
@@ -777,7 +790,7 @@ export function renderLatestFragment(inp: LatestFragmentInput): string {
   // Every button of the viewer sits in one row above the image, with the caption beside them.
   const showBtn = pin != null ? !pinnedEvicted : hasPreview;
   const caption =
-    pin != null ? `image #${pin}` : meta ? `${escapeHtml(meta)}, top-left at native size` : '';
+    pin != null ? `image #${pin}` : meta ? `${escapeHtml(meta)} · click to open full size` : '';
   const backBtn =
     pin != null ? `<button class="mini-btn" type="button" onclick="ppPin(null)">Back to latest</button>` : '';
   const srcBtn = showBtn
@@ -802,7 +815,28 @@ export function renderLatestFragment(inp: LatestFragmentInput): string {
           `</div>`;
   }
 
-  return bar + main + pane;
+  // Under the open image, the newest ones as thumbnails; a click opens one above.
+  const openId = pin ?? gallery[0]?.id;
+  const total = imageIds.length;
+  const thumbs =
+    gallery.length > 1
+      ? `<div class="gallery-head"><b>${numFmt(gallery.length)}</b> newest${total > gallery.length ? ` of ${numFmt(total)}` : ''}</div>` +
+        `<div class="gallery">` +
+        gallery
+          .map((g) => {
+            const on = g.id === openId;
+            return (
+              `<button class="thumb${on ? ' on' : ''}" type="button" aria-pressed="${on}" title="${escapeHtml(g.meta)}" onclick="ppPin(${g.id})">` +
+              `<img src="${stamped(g.id)}" alt="image #${g.id}" loading="lazy" />` +
+              `<span class="thumb-id">#${g.id}</span>` +
+              `</button>`
+            );
+          })
+          .join('') +
+        `</div><!-- /gallery -->`
+      : '';
+
+  return bar + main + pane + thumbs;
 }
 
 // ---- sessions bar chart --------------------------------------------------
@@ -929,10 +963,11 @@ const CSS = `
     --tint-a: rgba(31, 111, 235, .10); --tint-b: rgba(47, 111, 224, .07);
     --band: linear-gradient(120deg, #c9daf8, #e3eafa);
     --band-loss: linear-gradient(120deg, #f8d3cd, #f6e2e6);
+    --band-pos: linear-gradient(120deg, #c9ecd3, #e3f4e7);
     --tile-saved: linear-gradient(160deg, #2872e4, #1b54c2);
     --tile-quiet: linear-gradient(160deg, #69738a, #4b5469);
     --tile-over: linear-gradient(160deg, #c8402f, #a01246);
-    --pipe-quiet: #5d6880; --pipe-saved: #2468d8; --pipe-over: #b4283c; --switch-on: #2468d8; --switch-off: rgba(120, 124, 136, .26); --switch-night: #3d5a9e; --switch-track: #dfe3ea; --switch-knob: #9aa1ad;
+    --pipe-quiet: #5d6880; --pipe-sent: #2468d8; --pipe-saved: #1f9d4a; --pipe-over: #c8342a; --switch-on: #2468d8; --switch-off: rgba(120, 124, 136, .26); --switch-night: #3d5a9e; --switch-track: #dfe3ea; --switch-knob: #9aa1ad;
     --float: 0 1rem 3rem rgba(20, 21, 26, .18);
     --radius: .625rem; --radius-pane: 1rem; --radius-small: .4375rem;
     --sans: 'Inter fastpipe', Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; /* Inter from the design library, inlined; its optical size axis gives Inter Display on the big figures */
@@ -950,8 +985,9 @@ const CSS = `
     --tint-a: rgba(76, 141, 255, .13); --tint-b: rgba(47, 111, 224, .09);
     --band: linear-gradient(120deg, #4b5a78, #2a3145);
     --band-loss: linear-gradient(120deg, #7c2a22, #4d1424);
+    --band-pos: linear-gradient(120deg, #1f5a34, #173024);
     --tile-quiet: linear-gradient(160deg, #56607a, #2f3545);
-    --pipe-quiet: #414a5e; --switch-on: #4b8bf5; --switch-off: rgba(132, 147, 166, .34); --switch-night: #5b78c4; --switch-track: #263040; --switch-knob: #5d6880;
+    --pipe-quiet: #414a5e; --pipe-sent: #4b8bf5; --pipe-saved: #3fbf6a; --pipe-over: #e0564a; --switch-on: #4b8bf5; --switch-off: rgba(132, 147, 166, .34); --switch-night: #5b78c4; --switch-track: #263040; --switch-knob: #5d6880;
     --float: 0 1rem 3rem rgba(0, 0, 0, .55);
     color-scheme: dark;
   }
@@ -1049,8 +1085,9 @@ const CSS = `
     background: linear-gradient(160deg, var(--band) 0%, transparent 55%), var(--pane);
     border: 1px solid var(--line-soft); border-radius: var(--radius-pane);
   }
+  /* green when fastpipe saves, red when it costs more, blue when there is nothing to judge */
+  .kpi-pos { background: linear-gradient(160deg, var(--band-pos) 0%, transparent 55%), var(--pane); }
   .kpi-neg { background: linear-gradient(160deg, var(--band-loss) 0%, transparent 55%), var(--pane); }
-  .kpi-none { background: var(--pane); }
   .kpi-wide { grid-column: 1 / -1; }
   .kpi-label { margin: 0; font-size: .8125rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
   .kpi-fig { display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem .875rem; margin: 0; }
@@ -1059,9 +1096,9 @@ const CSS = `
     font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--accent-ink);
   }
   .kpi-says { font-size: 1.0625rem; font-weight: 600; color: var(--ink); }
+  .kpi-pos .kpi-num, .kpi-pos .kpi-says { color: var(--green); }
   .kpi-neg .kpi-num, .kpi-neg .kpi-says { color: var(--red); }
-  .kpi-none .kpi-num { color: var(--faint); }
-  .kpi-none .kpi-says { color: var(--muted); font-weight: 500; }
+  .kpi-none .kpi-num, .kpi-none .kpi-says { color: var(--accent-ink); }
   .kpi-sub { margin: 0; font-size: .8125rem; line-height: 1.45; color: var(--muted); }
   .kpi-sub b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
   .kpis-empty .kpi-label { font-size: 1.25rem; letter-spacing: 0; text-transform: none; color: var(--ink); }
@@ -1089,13 +1126,13 @@ const CSS = `
   .rec-num { font: 500 .875rem var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); }
   .rec-caption { grid-area: caption; display: flex; justify-content: flex-end; gap: 1.5rem; margin: 0; font: .8125rem/1.38 var(--mono); color: var(--muted); }
   .rec-caption b { font-weight: 600; color: var(--ink); }
-  .rec-key b { color: var(--accent-ink); }
+  .rec-key, .rec-key b { color: var(--green); }
   .gauge-loss .rec-key, .gauge-loss .rec-key b { color: var(--red); }
   .gauge-track { grid-area: track; display: flex; gap: 3px; height: 12px; min-width: 0; overflow: hidden; border-radius: 9999px; background: var(--inset); }
   .gauge-track:empty { border: 1px dashed var(--line-strong); }
   .gauge-seg { display: block; height: 100%; min-width: 3px; border-radius: 9999px; }
-  .gauge-sent, .gauge-base { background: var(--line-strong); }
-  .gauge-saved { background: linear-gradient(to right, #3b7bea, var(--pipe-saved)); }
+  .gauge-sent, .gauge-base { background: var(--pipe-sent); }
+  .gauge-saved { background: var(--pipe-saved); }
   .gauge-over { background: var(--pipe-over); }
 
   /* records */
@@ -1121,9 +1158,21 @@ const CSS = `
   .card.recent .rtable th:nth-child(8), .card.recent .rtable td:nth-child(8) { display: none; }
 
   /* Advanced: under the main screen, reached by scrolling */
-  .advanced { display: flex; flex-direction: column; gap: .875rem; margin-top: 1.25rem; padding-top: 1.5rem; border-top: 1px solid var(--line); }
-  .adv-head { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1.5rem; }
-  .adv-head h2 { margin: 0; font-size: 1.375rem; font-weight: 700; letter-spacing: -.01em; color: var(--ink); }
+  /* Advanced: closed under the main screen; opened, it grows the page and the page scrolls to it */
+  .advanced { margin-top: 1.25rem; }
+  .adv-head {
+    display: flex; align-items: center; gap: 1rem; padding: 1rem 1.25rem; cursor: pointer; list-style: none;
+    background: var(--pane); border: 1px solid var(--line-soft); border-radius: var(--radius-pane);
+  }
+  .adv-head::-webkit-details-marker { display: none; }
+  .adv-head:hover { border-color: var(--line-strong); }
+  .adv-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .adv-head h2 { margin: 0; font-size: 1.125rem; font-weight: 700; letter-spacing: -.01em; color: var(--ink); }
+  .adv-hint { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .8125rem; color: var(--faint); }
+  .adv-chev { width: 1.25rem; height: 1.25rem; flex: none; color: var(--muted); transition: transform .2s ease; }
+  .advanced[open] .adv-chev { transform: rotate(180deg); }
+  .advanced[open] .adv-head { border-color: var(--line-strong); }
+  .adv-body { display: flex; flex-direction: column; gap: .875rem; padding-top: .875rem; }
   .view { display: grid; grid-template-columns: minmax(0, 1fr); gap: .875rem; align-content: start; min-width: 0; }
   .view[hidden] { display: none; }
   .view > .card > [id^="frag-"] { max-height: 38rem; }
@@ -1228,8 +1277,16 @@ const CSS = `
   .dtable td.num { white-space: nowrap; color: var(--ink); font-family: var(--mono); }
   th.num, td.num { text-align: right; }
   td.num { font-family: var(--mono); font-size: .75rem; color: var(--ink); }
-  td.pos { font-weight: 600; }
+  td.pos { color: var(--green); font-weight: 600; }
   td.neg { color: var(--red); font-weight: 600; }
+  td.even { color: var(--accent-ink); font-weight: 600; }
+  .tok-word { margin-left: .375rem; font-family: var(--sans); font-size: .6875rem; font-weight: 500; letter-spacing: .02em; opacity: .8; }
+  /* each request carries its verdict as a stripe: green saved, red lost, blue even or not measured */
+  .rtable tr.r-pos td:first-child, .rtable tr.r-neg td:first-child, .rtable tr.r-even td:first-child { padding-left: .625rem; }
+  .rtable tr.r-pos td:first-child { box-shadow: inset 3px 0 var(--green); }
+  .rtable tr.r-neg td:first-child { box-shadow: inset 3px 0 var(--red); }
+  .rtable tr.r-even td:first-child { box-shadow: inset 3px 0 var(--accent); }
+  .card.recent .rtable thead th:first-child { padding-left: .625rem; }
   .endp { font: .75rem var(--mono); color: var(--ink); }
   .empty-cell { padding: 1.125rem 0; color: var(--faint); }
   /* status and "sent as" are plain words: only a failure gets colour */
@@ -1249,6 +1306,25 @@ const CSS = `
   .frame { max-height: 22.5rem; overflow: auto; padding: .25rem; background: #fff; border: 1px solid var(--line-strong); border-radius: var(--radius); scrollbar-width: thin; }
   .frame img { display: block; width: auto; height: auto; max-width: none; image-rendering: pixelated; }
   .frame-sm { max-height: 16.25rem; }
+  .card.shot .frame { max-height: 17rem; padding: 0; }
+  .card.shot .frame a { display: block; cursor: zoom-in; }
+  .card.shot .frame img { width: 100%; image-rendering: auto; }
+  /* the gallery: every recent image as a tile, the open one ringed in blue */
+  .gallery-head { margin: .875rem 0 .5rem; font-size: .75rem; color: var(--faint); }
+  .gallery-head b { font-family: var(--mono); font-weight: 600; color: var(--ink); }
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr)); gap: .5rem; }
+  .thumb {
+    position: relative; display: block; aspect-ratio: 4 / 3; padding: 0; overflow: hidden; cursor: pointer;
+    background: #fff; border: 1px solid var(--line-strong); border-radius: var(--radius-small);
+  }
+  .thumb img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top left; }
+  .thumb:hover { border-color: var(--accent); }
+  .thumb.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+  .thumb:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .thumb-id {
+    position: absolute; right: .25rem; bottom: .25rem; padding: 0 .3125rem; border-radius: .25rem;
+    font: 600 .625rem/1.5 var(--mono); color: #fff; background: rgba(20, 21, 26, .72);
+  }
   .pairing { display: grid; grid-template-columns: 1fr; gap: .625rem; }
   .pair-col { min-width: 0; }
   .pair-head { display: inline-block; margin-bottom: .375rem; font-size: .75rem; font-weight: 600; }
@@ -1389,6 +1465,21 @@ const GLUE_JS = `
     try { saved = localStorage.getItem('pp-view'); } catch (e) {}
     if (saved) ppView(saved);
   })();
+  // Advanced opens and closes; open, the page scrolls down to it. The state survives reloads.
+  var ppAdvRestoring = false;
+  function ppAdv(open) {
+    var d = document.getElementById('advanced');
+    if (!d) return;
+    if (d.open !== open) { d.open = open; return; } // the toggle event comes back here
+    try { localStorage.setItem('pp-adv', open ? '1' : '0'); } catch (e) {}
+    if (open && !ppAdvRestoring) d.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    ppAdvRestoring = false;
+  }
+  (function () {
+    var open = false;
+    try { open = localStorage.getItem('pp-adv') === '1'; } catch (e) {}
+    if (open) { ppAdvRestoring = true; document.getElementById('advanced').open = true; }
+  })();
 `;
 
 // Theme: light/dark via data-theme on <html>; saved in localStorage, defaults to system pref.
@@ -1469,16 +1560,19 @@ export function renderPage(port: number, hostLabel = ''): string {
 </div>
 
 <!-- Advanced: under the main screen, one view at a time; a view that is not showing loads once and then stops polling. -->
-<section class="advanced" id="advanced" aria-labelledby="adv-head">
-<div class="adv-head">
+<details class="advanced" id="advanced" ontoggle="ppAdv(this.open)">
+<summary class="adv-head">
   <h2 id="adv-head">Advanced</h2>
+  <span class="adv-hint">Breakdown · Sessions · Setup · Math</span>
+  <svg class="adv-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
+</summary>
+<div class="adv-body">
   <nav class="tabs" aria-label="Advanced views">
     <button class="tab" type="button" data-view="breakdown" aria-pressed="true" onclick="ppView('breakdown')">Breakdown</button>
     <button class="tab" type="button" data-view="sessions" aria-pressed="false" onclick="ppView('sessions')">Sessions</button>
     <button class="tab" type="button" data-view="setup" aria-pressed="false" onclick="ppView('setup')">Setup</button>
     <button class="tab" type="button" data-view="math" aria-pressed="false" onclick="ppView('math')">Math</button>
   </nav>
-</div>
 <section class="view" id="v-breakdown">
   <div class="card">
     <h3 class="card-head">Image vs text breakdown</h3>
@@ -1488,18 +1582,18 @@ export function renderPage(port: number, hostLabel = ''): string {
 <section class="view" id="v-sessions" hidden>
   <div class="card">
     <h3 class="card-head">Top sessions</h3>
-    <div id="frag-sessions" hx-get="/fragments/sessions" hx-trigger="load, every 5s [!document.getElementById('v-sessions').hidden]" hx-swap="innerHTML"></div>
+    <div id="frag-sessions" hx-get="/fragments/sessions" hx-trigger="load, every 5s [document.getElementById('advanced').open && !document.getElementById('v-sessions').hidden]" hx-swap="innerHTML"></div>
   </div>
   <div class="card">
     <h3 class="card-head">Full history</h3>
-    <div id="frag-stats" hx-get="/fragments/stats" hx-trigger="load, every 5s [!document.getElementById('v-sessions').hidden]" hx-swap="innerHTML"></div>
+    <div id="frag-stats" hx-get="/fragments/stats" hx-trigger="load, every 5s [document.getElementById('advanced').open && !document.getElementById('v-sessions').hidden]" hx-swap="innerHTML"></div>
   </div>
 </section><!-- /v-sessions -->
 
 <section class="view" id="v-setup" hidden>
   <div class="card">
     <h3 class="card-head">Image model scope</h3>
-    <div id="frag-models" hx-get="/fragments/models?part=csv" hx-trigger="load, every 2s [!document.getElementById('v-setup').hidden && (!document.activeElement || document.activeElement.id !== 'models-csv')]" hx-swap="innerHTML"></div>
+    <div id="frag-models" hx-get="/fragments/models?part=csv" hx-trigger="load, every 2s [document.getElementById('advanced').open && !document.getElementById('v-setup').hidden && (!document.activeElement || document.activeElement.id !== 'models-csv')]" hx-swap="innerHTML"></div>
     <p class="hint models-routing">This list only decides which models get images. Non-Anthropic IDs also need the routing settings described below.</p>
   </div>
   <div class="card help">
@@ -1539,10 +1633,11 @@ npx pxpipe-proxy</pre>
 <section class="view" id="v-math" hidden>
   <div class="card">
     <h3 class="card-head">How each number is computed</h3>
-    <div id="frag-math" hx-get="/fragments/header" hx-select=".math" hx-trigger="load, every 2s [!document.getElementById('v-math').hidden]" hx-swap="innerHTML"></div>
+    <div id="frag-math" hx-get="/fragments/header" hx-select=".math" hx-trigger="load, every 2s [document.getElementById('advanced').open && !document.getElementById('v-math').hidden]" hx-swap="innerHTML"></div>
   </div>
 </section><!-- /v-math -->
-</section><!-- /advanced -->
+</div><!-- /adv-body -->
+</details><!-- /advanced -->
 
 <div class="tray" x-data="{ toasts: [], next: 1 }"
      @pp-toast.window="if (toasts.some(t => t.text === $event.detail.text)) return; const id = next++; toasts.push({ id, text: $event.detail.text }); setTimeout(() => toasts = toasts.filter(t => t.id !== id), 5000)">

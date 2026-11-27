@@ -45,7 +45,7 @@ describe('dashboard screen', () => {
   });
 
   it('puts the recent requests and the images sent side by side', () => {
-    const pair = html.slice(html.indexOf('<div class="pair">'), html.indexOf('<section class="advanced"'));
+    const pair = html.slice(html.indexOf('<div class="pair">'), html.indexOf('<details class="advanced"'));
     expect(pair).toContain('id="frag-recent"');
     expect(pair).toContain('id="frag-latest"');
   });

@@ -115,12 +115,12 @@ describe('recent requests table', () => {
 
   it('orders its columns by weight, the saving first and the link last', () => {
     const heads = [...html.matchAll(/<th[^>]*>([^<]*)<\/th>/g)].map((m) => m[1]);
-    expect(heads).toEqual(['Saved/lost', 'Model', 'Sent as', 'As text', 'Sent', 'Cache hits', 'Result', 'Endpoint', '']);
+    expect(heads).toEqual(['Saved / wasted', 'Model', 'Sent as', 'As text', 'Sent', 'Cache hits', 'Result', 'Endpoint', '']);
   });
 
   it('fills each row in the same order', () => {
     const cells = [...html.matchAll(/<td[^>]*>(.*?)<\/td>/g)].map((m) => m[1].replace(/<[^>]+>/g, ''));
-    expect(cells).toEqual(['51,458', 'claude-fable-5-2', 'image', '70,829', '19,371', '174,524', '200', 'messages', 'Details →']);
+    expect(cells).toEqual(['+51,458saved', 'claude-fable-5-2', 'image', '70,829', '19,371', '174,524', '200', 'messages', 'Details →']);
   });
 
   it('spans the empty state over every column', () => {

@@ -91,6 +91,8 @@ const RECENT_CAP = 50;
  *  RECENT_CAP so every visible recent-requests row can still resolve its
  *  image. Images are never written to disk — this ring is the only store. */
 const IMAGE_RING_CAP = 800;
+/** How many of the newest images the dashboard gallery shows. */
+const GALLERY_SIZE = 24;
 
 /** One rendered image held in the in-memory ring. `id` is a monotonic
  *  counter (never reused) so a RecentRow can reference its image even after
@@ -1466,6 +1468,10 @@ export class DashboardState {
       // tell which RecentRow.img_id values still resolve — older ones have
       // been evicted and their "view" button should be disabled.
       image_ids: this.images.map((im) => im.id),
+      images: this.images
+        .slice(-GALLERY_SIZE)
+        .reverse()
+        .map((im) => ({ id: im.id, meta: im.meta, ts: im.ts })),
     };
     return new Response(JSON.stringify(payload), {
       headers: { 'content-type': 'application/json' },
@@ -1475,7 +1481,7 @@ export class DashboardState {
   /** GET /proxy-latest-png[?id=N] — raw PNG from the image ring. With no id
    *  (or an unknown id) the latest render is returned; ?id=N pulls that
    *  specific image while it's still in the ring. 404 once evicted. */
-  servePng(id?: number): Response {
+  servePng(id?: number, stamp?: string | null): Response {
     // Cropping is done client-side via CSS (object-position + overflow:hidden).
     // Python decoded the PNG to crop server-side; we skip that to avoid
     // pulling a PNG decoder back in — the CSS approach renders identically.
@@ -1486,8 +1492,12 @@ export class DashboardState {
     if (!entry) {
       return new Response('no image yet', { status: 404 });
     }
+    // ?id=N&t=<ms> names one image for good (ids restart with the process, the time does not),
+    // so the gallery's thumbnails can stay in the browser cache across the 2 s refresh.
+    const stamped = stamp != null && stamp === String(Math.round(entry.ts * 1000));
+    const cacheControl = id !== undefined && stamped ? 'private, max-age=86400, immutable' : 'no-cache';
     return new Response(entry.png as unknown as BodyInit, {
-      headers: { 'content-type': 'image/png', 'cache-control': 'no-cache' },
+      headers: { 'content-type': 'image/png', 'cache-control': cacheControl },
     });
   }
 

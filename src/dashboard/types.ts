@@ -61,6 +61,14 @@ export interface RecentPayload {
   has_preview: boolean;
   preview_meta: string;
   image_ids?: number[];
+  /** The newest images still in the ring, newest first, for the gallery. */
+  images?: GalleryImage[];
+}
+
+export interface GalleryImage {
+  id: number;
+  meta: string;
+  ts: number;
 }
 
 export interface RecentRow {
