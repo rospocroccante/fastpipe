@@ -1,8 +1,8 @@
 /**
- * The dashboard is one screen, read from left to right: the saving first, then
- * the pipe it comes from, then the numbers. Everything else is Advanced: closed
- * until its button is pressed, then one bar of buttons picks the view shown
- * under them, and only the view on screen polls the server.
+ * The dashboard reads top to bottom: three containers (tokens, money, cost per
+ * request), the saving bar, the model switches, then the recent requests with the
+ * images beside them. Advanced sits under all that, reached by scrolling: one view
+ * at a time, picked by its tabs, and only the view on screen polls the server.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -22,7 +22,7 @@ function barMarkup(): string {
 
 /** The markup of one view, from its opening tag to its closing comment. */
 function viewMarkup(name: string): string {
-  const start = html.indexOf(`<section class="view" id="v-${name}" hidden>`);
+  const start = html.search(new RegExp(`<section class="view" id="v-${name}"( hidden)?>`));
   const end = html.indexOf(`<!-- /v-${name} -->`);
   if (start < 0 || end < 0) throw new Error(`no view ${name} in the page`);
   return html.slice(start, end);
@@ -36,130 +36,85 @@ function panelTag(id: string): string {
 }
 
 describe('dashboard screen', () => {
-  it('reads left to right: the saving, then the numbers, then the view', () => {
-    const order = ['id="frag-session"', 'id="frag-header"', 'class="view"'].map((s) => html.indexOf(s));
+  it('reads top to bottom: the figures, the models, the requests and images, then Advanced', () => {
+    const order = ['id="frag-session"', 'id="frag-picker"', 'id="frag-recent"', 'id="frag-latest"', 'id="advanced"'].map((s) =>
+      html.indexOf(s),
+    );
     expect(order.every((i) => i > 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
-    // both sit in the strip at the top of the screen
-    const strip = html.slice(html.indexOf('<div class="strip">'), html.indexOf('<!-- /strip -->'));
-    expect(strip).toContain('id="frag-session"');
-    expect(strip).toContain('id="frag-header"');
   });
 
-  it('keeps every button of the page shell in one bar', () => {
+  it('puts the recent requests and the images sent side by side', () => {
+    const pair = html.slice(html.indexOf('<div class="pair">'), html.indexOf('<section class="advanced"'));
+    expect(pair).toContain('id="frag-recent"');
+    expect(pair).toContain('id="frag-latest"');
+  });
+
+  it('keeps the page buttons in one bar, with no Advanced button', () => {
     const bar = barMarkup();
     expect(bar).toContain('id="frag-toggle"');
     expect(bar).toContain('id="theme-btn"');
-    // the toast tray is not part of the screen until something fails
-    const shell = html.slice(0, html.indexOf('<div class="tray"'));
-    expect(shell.replace(bar, '')).not.toContain('<button');
+    expect(bar).not.toContain('adv-btn');
+    expect(html).not.toContain('ppAdvanced');
   });
 
-  it('offers one tab per view, in the bar, with the first view picked', () => {
+  it('offers one tab per Advanced view, with the breakdown picked first', () => {
     const tabs = [
-      ...barMarkup().matchAll(
+      ...html.matchAll(
         /<button class="tab" type="button" data-view="([a-z]+)" aria-pressed="(true|false)" onclick="ppView\('([a-z]+)'\)">([^<]+)<\/button>/g,
       ),
-    ].map((m) => [m[1], m[2], m[3], m[4]]);
+    ].map((m) => [m[1], m[2], m[4]]);
     expect(tabs).toEqual([
-      ['images', 'true', 'images', 'Images'],
-      ['sessions', 'false', 'sessions', 'Sessions'],
-      ['setup', 'false', 'setup', 'Setup'],
-      ['math', 'false', 'math', 'Math'],
+      ['breakdown', 'true', 'Breakdown'],
+      ['sessions', 'false', 'Sessions'],
+      ['setup', 'false', 'Setup'],
+      ['math', 'false', 'Math'],
     ]);
     const views = [...html.matchAll(/<section class="view" id="v-([a-z]+)"( hidden)?>/g)].map((m) => [
       m[1],
       m[2] === undefined ? 'showing' : 'hidden',
     ]);
-    // nothing under the saving is open until Advanced is pressed
     expect(views).toEqual([
-      ['images', 'hidden'],
+      ['breakdown', 'showing'],
       ['sessions', 'hidden'],
       ['setup', 'hidden'],
       ['math', 'hidden'],
     ]);
   });
 
-  it('keeps the views and their tabs closed behind one Advanced button', () => {
-    const bar = barMarkup();
-    expect(bar).toMatch(/<button class="mini-btn adv-btn" type="button" id="adv-btn" aria-expanded="false" aria-controls="advanced" onclick="ppAdvanced\(\)">Advanced<\/button>/);
-    expect(bar).toContain('<nav class="tabs" aria-label="Views" hidden>');
-    expect(html).toContain('<main class="views" id="advanced">');
-    // opening it shows the tabs and the view picked last; closing it hides every view, so none polls
-    expect(html).toContain("document.querySelector('.tabs').hidden = !ppAdvOpen;");
-    expect(html).toContain("v.hidden = !ppAdvOpen || v.id !== 'v-' + name;");
-    expect(html).toContain("localStorage.setItem('pp-adv', ppAdvOpen ? '1' : '0')");
-    expect(html).toContain("localStorage.getItem('pp-adv')");
-  });
-
   it('says which models are validated from the logo, with no question mark', () => {
     const tip = barMarkup().match(/<span class="q brand-tip" tabindex="0"[^>]*data-tip="([^"]+)"><svg /);
     expect(barMarkup()).not.toMatch(/>\?<\/span>/);
     expect(tip?.[1]).toContain('Image compression is validated for Fable 5, Gemini 3.6 Flash and Gemini 3.7 Flash.');
-    expect(viewMarkup('setup')).not.toContain('validated for');
   });
 
-  it('puts each live panel inside its view', () => {
-    for (const id of ['frag-context-map', 'frag-latest']) {
-      expect(viewMarkup('images')).toContain(`id="${id}"`);
-    }
-    for (const id of ['frag-sessions', 'frag-stats']) {
-      expect(viewMarkup('sessions')).toContain(`id="${id}"`);
-    }
+  it('puts each Advanced panel inside its view', () => {
+    expect(viewMarkup('breakdown')).toContain('id="frag-context-map"');
+    for (const id of ['frag-sessions', 'frag-stats']) expect(viewMarkup('sessions')).toContain(`id="${id}"`);
     expect(viewMarkup('setup')).toContain('id="frag-models"');
     expect(viewMarkup('math')).toContain('id="frag-math"');
   });
 
-  it('shows the recent requests under the strip, outside Advanced', () => {
-    const html = renderPage(47821);
-    const strip = html.indexOf('<!-- /strip -->');
-    const recent = html.indexOf('id="frag-recent"');
-    const advanced = html.indexOf('<main class="views" id="advanced">');
-    expect(strip).toBeLessThan(recent);
-    expect(recent).toBeLessThan(advanced);
-  });
-
-  it('keeps the name for screen readers only, not as text in the bar', () => {
-    expect(barMarkup()).toContain('<h1 class="sr-only">fastpipe</h1>');
-  });
-
-  it('polls a panel only while its view is showing', () => {
-    const owner: Record<string, string> = {
-      'frag-latest': 'images',
-      'frag-sessions': 'sessions',
-      'frag-stats': 'sessions',
-      'frag-models': 'setup',
-      'frag-math': 'math',
-    };
+  it('polls an Advanced panel only while its view is showing', () => {
+    const owner: Record<string, string> = { 'frag-sessions': 'sessions', 'frag-stats': 'sessions', 'frag-models': 'setup', 'frag-math': 'math' };
     for (const [panel, view] of Object.entries(owner)) {
       expect(panelTag(panel)).toContain(`!document.getElementById('v-${view}').hidden`);
     }
   });
 
-  it('still loads every panel once, so a view opens with content in it', () => {
-    for (const id of ['frag-recent', 'frag-context-map', 'frag-latest', 'frag-sessions', 'frag-stats', 'frag-models', 'frag-math']) {
-      expect(panelTag(id)).toMatch(/hx-trigger="load[,"]/);
-    }
-  });
-
-  it('puts the model switches between the strip and the recent requests', () => {
-    const at = (id: string): number => html.indexOf(`id="${id}"`);
-    expect(at('frag-picker')).toBeGreaterThan(at('frag-header'));
-    expect(at('frag-picker')).toBeLessThan(at('frag-recent'));
-    expect(panelTag('frag-picker')).toContain('hx-get="/fragments/models?part=picker"');
-  });
-
-  it('never stops polling the picture, the numbers and the on/off switch', () => {
-    for (const id of ['frag-session', 'frag-header', 'frag-toggle', 'frag-recent']) {
+  it('never stops polling the figures, the requests, the images and the on/off switch', () => {
+    for (const id of ['frag-session', 'frag-toggle', 'frag-recent', 'frag-latest']) {
       expect(panelTag(id)).toContain('hx-trigger="load, every 2s');
     }
   });
 
-  it('takes the numbers and the formulas from the same fragment', () => {
-    expect(panelTag('frag-header')).toContain('hx-get="/fragments/header"');
-    expect(panelTag('frag-header')).toContain('hx-select=".numbers"');
+  it('takes the formulas from the header fragment, and nothing else', () => {
     expect(panelTag('frag-math')).toContain('hx-get="/fragments/header"');
-    expect(panelTag('frag-math')).toContain('hx-select=".math"');
+    expect(html).not.toContain('id="frag-header"');
+  });
+
+  it('puts the model switches between the saving bar and the recent requests', () => {
+    expect(panelTag('frag-picker')).toContain('hx-get="/fragments/models?part=picker"');
   });
 
   it('does not refresh the model list while its text box is being edited', () => {
@@ -183,7 +138,7 @@ describe('dashboard screen', () => {
 
   it('switches day and night with a labelled switch', () => {
     const bar = barMarkup();
-    expect(bar).toContain('<span class="theme-label">Dark</span>');
+    expect(bar).toContain('<span class="seg-off" aria-hidden="true">Light</span><span class="seg-on" aria-hidden="true">Dark</span>');
     const btn = bar.match(/<button[^>]*id="theme-btn"[^>]*>/);
     expect(btn?.[0]).toContain('role="switch"');
     expect(btn?.[0]).toContain('aria-checked="false"');

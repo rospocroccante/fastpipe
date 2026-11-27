@@ -337,11 +337,10 @@ describe('serveFragment', () => {
     expect(html).toContain('never calls Anthropic /count_tokens');
   });
 
-  it('renders keyboard-accessible hover help for stat question marks', async () => {
+  it('serves the formulas as the header fragment', async () => {
     const header = await (await dash.serveFragment('header', url, 4711)).text();
-    expect(header).toContain('class="q" tabindex="0"');
-    expect(header).toContain('data-tip=');
-    expect(header).toContain('aria-label=');
+    expect(header).toContain('<section class="math">');
+    expect(header).toContain('on port 4711');
   });
 
   it('uses source text parallel to each captured PNG', async () => {
@@ -442,9 +441,9 @@ describe('dashboard page help UI', () => {
       pricing_assumptions: { input_per_mtok: 10, output_multiplier: 5 },
     } as StatsPayload, 47821);
 
-    expect(html).toContain('$0.1607');
-    expect(html).toContain('vs $0.4854 as text');
-    expect(html).not.toContain('vs $0.0722 as text');
+    expect(html).toContain('avg $0.1607/req');
+    expect(html).toContain('$0.4854/req');
+    expect(html).not.toContain('$0.0722/req');
     expect(html).toContain('same paid imaged requests');
   });
 });

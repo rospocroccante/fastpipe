@@ -2,6 +2,7 @@
 // Presentation only; server code (src/dashboard.ts, src/node.ts) needs no edits.
 
 import { HTMX_JS, ALPINE_JS } from './vendor.js';
+import { INTER_WOFF2, MONO_WOFF2 } from './font.js';
 import { CACHE_CREATE_RATE, CACHE_READ_RATE } from '../core/baseline.js';
 import type {
   StatsPayload,
@@ -66,7 +67,8 @@ export function renderToggleFragment(enabled: boolean): string {
     `<div class="switch">` +
     `<span class="switch-state ${enabled ? 'on' : 'off'}">Compression</span>` +
     // The id lets htmx carry the old state over the 2s swap, so the knob slides instead of jumping.
-    `<button class="switch-btn" type="button" id="switch-btn" role="switch" aria-checked="${enabled}" title="Kill switch. Compression turns itself back on when the proxy restarts." aria-label="${enabled ? 'Disable compression' : 'Enable compression'}" hx-post="/fragments/toggle" hx-target="#frag-toggle" hx-vals='{"enabled": ${!enabled}}'${confirm}>` +
+    `<button class="switch-btn seg-switch" type="button" id="switch-btn" role="switch" aria-checked="${enabled}" title="Kill switch. Compression turns itself back on when the proxy restarts." aria-label="${enabled ? 'Disable compression' : 'Enable compression'}" hx-post="/fragments/toggle" hx-target="#frag-toggle" hx-vals='{"enabled": ${!enabled}}'${confirm}>` +
+    `<span class="seg-off" aria-hidden="true">Off</span><span class="seg-on" aria-hidden="true">On</span>` +
     `</button>` +
     `</div>`
   );
@@ -191,13 +193,14 @@ function renderModelPicker(ids: string[], on: Set<string>, labelOf: Map<string, 
       `title="${escapeHtml(`${lit ? 'Stop compressing' : 'Compress'} ${id}`)}" ` +
       `hx-post="/fragments/models?part=picker" hx-target="#frag-picker" ` +
       `hx-vals='${escapeHtml(`{"model":${JSON.stringify(id)},"on":${!lit}}`)}'>` +
-      `<span class="mswitch-name">${escapeHtml(label)}</span><span class="mswitch-track" aria-hidden="true"></span></button>`
+      `<span class="mswitch-name">${escapeHtml(label)}</span><span class="seg-switch mini" aria-hidden="true"><span class="seg-off">Off</span><span class="seg-on">On</span></span></button>`
     );
   };
   const group = (name: string, list: string[]): string =>
     list.length ? `<span class="pick-group"><span class="pick-family">${name}</span>${list.map(sw).join('')}</span>` : '';
   const claude = ids.filter((id) => id.startsWith('claude'));
-  const gemini = ids.filter((id) => id.includes('gemini'));
+  // The Gemini family switch covers every version; single versions show here only while on.
+  const gemini = ids.filter((id) => id === 'gemini' || (id.includes('gemini') && on.has(id)));
   const openai = ids.filter((id) => !id.startsWith('claude') && !id.includes('gemini'));
   return (
     `<div class="picker${enabled ? '' : ' picker-off'}">` +
@@ -225,11 +228,11 @@ export function renderSessionSummaryFragment(s: StatsPayload): string {
   const measured = s.compressed_requests ?? 0;
   if (measured <= 0) {
     return (
-      `<div class="gauge gauge-empty">` +
-      `<header class="head"><h2 class="head-title">Warming up…</h2>` +
-      `<p class="head-sub">Point Claude Code at this proxy with <code>ANTHROPIC_BASE_URL</code>, or launch it with <code>fastpipe warp -- claude</code> to keep <code>/remote-control</code> and claude.ai connectors working. Send a message and your running savings show up right here.</p></header>` +
-      `<div class="record"><div class="gauge-track"></div></div>` +
-      `</div>`
+      `<div class="kpis kpis-empty"><section class="kpi kpi-wide">` +
+      `<h2 class="kpi-label">Warming up…</h2>` +
+      `<p class="kpi-sub">Point Claude Code at this proxy with <code>ANTHROPIC_BASE_URL</code>, or launch it with <code>fastpipe warp -- claude</code> to keep <code>/remote-control</code> and claude.ai connectors working. Send a message and the savings show up here.</p>` +
+      `</section></div>` +
+      `<section class="card pipe-card"><div class="record"><div class="gauge-track"></div></div></section>`
     );
   }
   // Cache-aware reduction — same basis as the Details panel + Saved column.
@@ -254,8 +257,7 @@ export function renderSessionSummaryFragment(s: StatsPayload): string {
   const restPct = whole > 0 ? 100 - partPct : 0;
   const seg = (cls: string, pct: number, name: string, amount: number): string =>
     pct > 0
-      ? `<span class="gauge-seg ${cls}" style="width:${pct.toFixed(1)}%">` +
-        `<span class="seg-name">${name}</span><span class="seg-num">${kFmt(amount)}</span></span>`
+      ? `<span class="gauge-seg ${cls}" style="width:${pct.toFixed(1)}%" title="${name}: ${kFmt(amount)}"></span>`
       : '';
 
   // Without a text baseline there is nothing to compare against: show what was sent and say so.
@@ -270,34 +272,81 @@ export function renderSessionSummaryFragment(s: StatsPayload): string {
     ? `<span class="rec-name">Text baseline not measured yet</span>`
     : `<span class="rec-name">${loss ? 'With fastpipe' : 'Without fastpipe'}</span><span class="rec-num">${kFmt(whole)}</span>`;
 
-  // The money next to the percentage: saved in blue, wasted in red. Providers without
-  // configured pricing are left out of the dollars, and the note says how many.
+  // Dollars only cover requests with provider pricing; the others are named, not guessed.
   const paid = s.compressed_paid_requests ?? 0;
   const unpriced = Math.max(0, measured - paid);
   const usd = s.saved_usd ?? 0;
-  const money = paid > 0
-    ? `<p class="head-money${usd < 0 ? ' neg' : ''}" title="${escapeHtml(usdFmt(usd))}"><span class="gauge-num">${bigUsd(usd)}</span> ${usd < 0 ? 'wasted' : 'saved'}</p>`
+  const spent = s.compressed_actual_usd ?? 0;
+  const without = spent + usd;
+  const unpricedNote = unpriced > 0
+    ? ` · ${numFmt(unpriced)} without pricing left out`
     : '';
-  const moneyNote = paid === 0
-    ? ' No provider pricing for these requests, so no dollars.'
-    : unpriced > 0
-      ? ` Dollars leave out ${numFmt(unpriced)} provider-priced request${unpriced === 1 ? '' : 's'}.`
-      : '';
+  const moneyKpi = paid > 0
+    ? kpi(
+        'Money',
+        `<span title="${escapeHtml(usdFmt(usd))}">${bigUsd(usd)}</span>`,
+        usd < 0 ? 'wasted' : 'saved',
+        `<b>${usdFmt(spent)}</b> spent vs <b>${usdFmt(without)}</b> without fastpipe${unpricedNote}`,
+        usd < 0 ? 'neg' : 'pos',
+      )
+    : kpi('Money', '—', 'no dollars', 'No provider pricing for these requests.', 'none');
+
+  // Compare the same imaged requests on both sides. Passthrough requests are
+  // generally smaller because the profitability gate selected them, so their
+  // average is not a valid "without fastpipe" counterfactual.
+  const cAvg = s.compressed_avg_usd_per_request ?? 0;
+  const withoutAvg = paid > 0 ? cAvg + usd / paid : 0;
+  const costDelta = withoutAvg > 0 ? Math.round((cAvg / withoutAvg - 1) * 100) : 0;
+  const costKpi = paid > 0
+    ? kpi(
+        'Cost per request',
+        `$${cAvg.toFixed(cAvg >= 1 ? 2 : 4)}`,
+        costDelta === 0 ? 'same as text' : `${costDelta < 0 ? '−' : '+'}${Math.abs(costDelta)}% vs text`,
+        `<b>$${withoutAvg.toFixed(withoutAvg >= 1 ? 2 : 4)}</b> per request as text`,
+        cAvg <= withoutAvg ? 'pos' : 'neg',
+      )
+    : kpi('Cost per request', '—', 'no dollars', 'Shows once an imaged request has provider pricing.', 'none');
+
+  const tokensKpi = kpi(
+    'Input tokens',
+    compared ? `${Math.abs(inputPct).toFixed(0)}%` : '—',
+    !compared ? 'not measured yet' : loss ? 'more than as text' : 'fewer than as text',
+    `<b>${numFmt(measured)}</b> of ${numFmt(s.requests ?? measured)} requests sent as images, after cache discounts`,
+    loss ? 'neg' : 'pos',
+  );
 
   return (
-    `<div class="gauge${loss ? ' gauge-loss' : ''}">` +
-    `<header class="head"><div class="head-figs"><h2 class="head-title"><span class="gauge-num">${Math.abs(inputPct).toFixed(0)}%</span> ` +
-    `${loss ? 'more input tokens' : 'fewer input tokens'}</h2>${money}</div>` +
-    `<p class="head-sub">Since start, after cache discounts. ${numFmt(measured)} request${measured === 1 ? '' : 's'} imaged.${moneyNote}</p></header>` +
+    `<div class="kpis${loss ? ' kpis-loss' : ''}">` +
+    tokensKpi +
+    moneyKpi +
+    costKpi +
+    `</div>` +
+    `<section class="card pipe-card${loss ? ' gauge-loss' : ''}" aria-label="Input tokens, with and without fastpipe">` +
     `<div class="record">` +
     `<div class="rec-head">${wholeLabel}</div>` +
-    `<div class="gauge-track" role="img" aria-label="${spoken}" style="--cut:${rest > 0 ? (part > 0 ? partPct.toFixed(1) : '-100') : '200'}%">` +
+    `<div class="gauge-track" role="img" aria-label="${spoken}">` +
     (loss
       ? seg('gauge-base', partPct, 'As text', part) + seg('gauge-over', restPct, 'Extra sent', rest)
       : seg('gauge-sent', partPct, 'Sent', part) + seg('gauge-saved', restPct, 'Not sent', rest)) +
     `</div>` +
+    `<p class="rec-caption">` +
+    (loss
+      ? `<span><b>${kFmt(part)}</b> as text</span><span class="rec-key"><b>${kFmt(rest)}</b> extra sent</span>`
+      : `<span><b>${kFmt(part)}</b> sent</span><span class="rec-key"><b>${kFmt(rest)}</b> not sent</span>`) +
+    `</p>` +
     `</div>` +
-    `</div>`
+    `</section>`
+  );
+}
+
+/** One of the three headline containers: a label, the figure, what it means, and one line of detail. */
+function kpi(label: string, figure: string, says: string, sub: string, tone: 'pos' | 'neg' | 'none'): string {
+  return (
+    `<section class="kpi kpi-${tone}">` +
+    `<h2 class="kpi-label">${label}</h2>` +
+    `<p class="kpi-fig"><span class="kpi-num">${figure}</span><span class="kpi-says">${says}</span></p>` +
+    `<p class="kpi-sub">${sub}</p>` +
+    `</section>`
   );
 }
 
@@ -323,31 +372,10 @@ function bigUsd(n: number): string {
   return a >= 100 ? `$${Math.round(a).toLocaleString('en-US')}` : usdFmt(a);
 }
 
-/**
- * One row of numbers. `tip` makes the label focusable and shows the explanation on hover or focus.
- * `quiet` rows are context (how many requests, for how long) and print smaller than the savings.
- * `note` is markup: a <b> inside it marks the figure to look at.
- */
-function ledgerRow(label: string, value: string, note: string, cls = '', tip = '', quiet = false): string {
-  const name = tip
-    ? `<span class="q" tabindex="0" aria-label="${escapeHtml(`${label}. ${tip}`)}" data-tip="${escapeHtml(tip)}">${label}</span>`
-    : label;
-  return (
-    `<div class="ledger-row${quiet ? ' quiet' : ''}">` +
-    `<dt>${name}</dt>` +
-    `<dd class="ledger-val${cls ? ` ${cls}` : ''}">${value}</dd>` +
-    `<dd class="ledger-note">${note}</dd>` +
-    `</div>`
-  );
-}
-
 export function renderHeaderFragment(s: StatsPayload, port: number): string {
   const pa = s.pricing_assumptions;
-  const unpricedImaged = Math.max(
-    0,
-    (s.compressed_requests ?? 0) - (s.compressed_paid_requests ?? 0),
-  );
-  const onlyUnpriced = unpricedImaged > 0 && (s.compressed_paid_requests ?? 0) === 0;
+  const onlyUnpriced =
+    (s.compressed_requests ?? 0) > (s.compressed_paid_requests ?? 0) && (s.compressed_paid_requests ?? 0) === 0;
 
   // Compare the same imaged requests on both sides. Passthrough requests are
   // generally smaller because the profitability gate selected them, so their
@@ -355,48 +383,6 @@ export function renderHeaderFragment(s: StatsPayload, port: number): string {
   const cAvg = s.compressed_avg_usd_per_request ?? 0;
   const paidImaged = s.compressed_paid_requests ?? 0;
   const withoutAvg = paidImaged > 0 ? cAvg + (s.saved_usd ?? 0) / paidImaged : 0;
-  // How far the imaged cost sits from the text cost, as the one figure to read first.
-  const costDelta = withoutAvg > 0 ? Math.round((cAvg / withoutAvg - 1) * 100) : 0;
-  const costDeltaMark = costDelta === 0 ? '' : `<b>${costDelta < 0 ? '−' : '+'}${Math.abs(costDelta)}%</b> `;
-  const costRow = paidImaged > 0
-    ? ledgerRow(
-        'Cost per request',
-        `$${cAvg.toFixed(4)}`,
-        `${costDeltaMark}vs $${withoutAvg.toFixed(4)} as text`,
-        cAvg <= withoutAvg ? 'pos' : 'neg',
-        'Average cost of paid imaged requests versus the cache-aware text counterfactual for those same requests. Unmeasured requests are assigned zero savings.',
-      )
-    : onlyUnpriced
-      ? ledgerRow(
-          'Cost per request',
-          '—',
-          'provider pricing not configured',
-          'muted-val',
-          'Token savings are available, but this provider is excluded from Claude-priced dollar estimates.',
-        )
-      : ledgerRow(
-        'Cost per request',
-        'collecting…',
-        'waiting for a paid imaged request',
-        'muted-val',
-        'The comparison appears after an imaged request returns provider usage.',
-      );
-
-  const ledger =
-    `<div class="numbers"><h2 class="list-head">Since start</h2><dl class="ledger">` +
-    ledgerRow(
-      'Input tokens saved',
-      numFmt(s.saved_input_tokens),
-      'vs the same context as text',
-      'pos',
-       'Bulky context sent as compact images instead of text. Uses provider-reported input tokens and a measured or model-profile text counterfactual; recent turns and output stay text.',
-     ) +
-    costRow +
-    ledgerRow('Requests', numFmt(s.requests), `<b>${numFmt(s.compressed_requests)}</b> sent as images`, '', '', true) +
-    // NOTE: tests assert the header fragment contains the port number.
-    ledgerRow('Running for', formatDuration(s.uptime_sec), `on port ${port}`, '', '', true) +
-    `</dl></div>`;
-
   // math drawer
   const savedMath =
     `<div><span class="k">formula:</span> <span class="v">saved = baseline − actual</span></div>` +
@@ -454,7 +440,7 @@ export function renderHeaderFragment(s: StatsPayload, port: number): string {
   // A block of its own, after the numbers: the page shows the numbers in the strip and this in the Math view.
   const math =
     `<section class="math">` +
-    `<p class="drawer-intro">Every number in the strip, derived from the same per-event log. The proxy only moves <em>input</em> tokens; output is shown on both sides so percentages stay honest.</p>` +
+    `<p class="drawer-intro">Every number at the top, derived from the same per-event log. The proxy only moves <em>input</em> tokens; output is shown on both sides so percentages stay honest. Running for ${formatDuration(s.uptime_sec)} on port ${port}.</p>` +
     `<div class="math-grid">` +
     mathBlock('Input tokens saved', savedMath) +
     mathBlock('Dollars saved', usdMath) +
@@ -463,7 +449,7 @@ export function renderHeaderFragment(s: StatsPayload, port: number): string {
     mathBlock('Token-equivalent (what the weekly cap counts)', tokeqMath) +
     `</div></section>`;
 
-  return ledger + math;
+  return math;
 }
 
 // ---- request x-ray (image vs text breakdown) -----------------------------
@@ -699,7 +685,7 @@ export function renderRecentFragment(p: RecentPayload): string {
             const viewId = (e.img_ids ?? (e.img_id != null ? [e.img_id] : []))[0];
             const viewLink =
               viewId != null
-                ? `<a class="row-view" href="#" hx-get="/fragments/context-map?req=${viewId}" hx-target="#frag-context-map" hx-swap="innerHTML">Details →</a>`
+                ? `<a class="row-view" href="#" hx-get="/fragments/context-map?req=${viewId}" hx-target="#frag-context-map" hx-swap="innerHTML" onclick="ppPin(${viewId});ppView('breakdown')">Details →</a>`
                 : `<span class="muted">—</span>`;
             const saved = e.session_saved_so_far_delta;
             // A loss that disappears when the newly written prefix is repriced at
@@ -929,6 +915,8 @@ const FAVICON =
 // No web fonts and no images: the page stays one small self-contained document. Red is only for a
 // loss or a failure.
 const CSS = `
+  @font-face { font-family: 'Inter fastpipe'; src: url(${INTER_WOFF2}) format('woff2'); font-weight: 100 900; font-style: normal; font-display: swap; }
+  @font-face { font-family: 'JetBrains Mono fastpipe'; src: url(${MONO_WOFF2}) format('woff2'); font-weight: 100 800; font-style: normal; font-display: swap; }
   /* One screen, read from left to right. A bar of buttons, then a strip that opens with the saving
      and continues with the numbers, then the view picked in the bar. Blue is fastpipe's own colour
      and marks the saving. */
@@ -944,11 +932,11 @@ const CSS = `
     --tile-saved: linear-gradient(160deg, #2872e4, #1b54c2);
     --tile-quiet: linear-gradient(160deg, #69738a, #4b5469);
     --tile-over: linear-gradient(160deg, #c8402f, #a01246);
-    --pipe-quiet: #5d6880; --pipe-saved: #2468d8; --pipe-over: #b4283c; --switch-on: #34c759; --switch-off: rgba(120, 124, 136, .26); --switch-night: #3d5a9e;
+    --pipe-quiet: #5d6880; --pipe-saved: #2468d8; --pipe-over: #b4283c; --switch-on: #2468d8; --switch-off: rgba(120, 124, 136, .26); --switch-night: #3d5a9e; --switch-track: #dfe3ea; --switch-knob: #9aa1ad;
     --float: 0 1rem 3rem rgba(20, 21, 26, .18);
     --radius: .625rem; --radius-pane: 1rem; --radius-small: .4375rem;
-    --sans: 'Segoe UI Historic', 'Segoe UI', Helvetica, Arial, sans-serif; /* the stack facebook.com uses for its text */
-    --mono: 'Geist Mono Variable', 'Geist Mono', ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: 'Inter fastpipe', Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; /* Inter from the design library, inlined; its optical size axis gives Inter Display on the big figures */
+    --mono: 'JetBrains Mono fastpipe', 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
     color-scheme: light;
   }
   /* Dark theme. Set before first paint by the <head> script (localStorage 'pp-theme' else system
@@ -963,7 +951,7 @@ const CSS = `
     --band: linear-gradient(120deg, #4b5a78, #2a3145);
     --band-loss: linear-gradient(120deg, #7c2a22, #4d1424);
     --tile-quiet: linear-gradient(160deg, #56607a, #2f3545);
-    --pipe-quiet: #414a5e; --switch-on: #30d158; --switch-off: rgba(132, 147, 166, .34); --switch-night: #3d5a9e;
+    --pipe-quiet: #414a5e; --switch-on: #4b8bf5; --switch-off: rgba(132, 147, 166, .34); --switch-night: #5b78c4; --switch-track: #263040; --switch-knob: #5d6880;
     --float: 0 1rem 3rem rgba(0, 0, 0, .55);
     color-scheme: dark;
   }
@@ -972,13 +960,14 @@ const CSS = `
   *, *::before, *::after { transition: background-color .25s ease, border-color .25s ease, color .25s ease; }
   html { -webkit-text-size-adjust: 100%; background: var(--canvas); }
   body {
-    display: grid; grid-template-rows: auto auto auto minmax(0, 1fr) auto; gap: .75rem;
-    margin: 0 auto; max-width: 120rem; min-height: 100vh; padding: 0 .75rem .75rem;
+    display: flex; flex-direction: column; gap: .875rem;
+    margin: 0 auto; max-width: 120rem; min-height: 100vh; padding: 1.25rem 1.25rem 2.5rem;
     background:
       radial-gradient(68.75rem 38.75rem at 12% -12%, var(--tint-a), transparent 62%),
       radial-gradient(56.25rem 35rem at 104% -6%, var(--tint-b), transparent 60%);
     background-repeat: no-repeat;
     color: var(--ink); font: .875rem/1.5 var(--sans); -webkit-font-smoothing: antialiased;
+    font-feature-settings: 'cv11', 'ss01'; /* Inter: single-storey a, open digits */
   }
   strong, b { font-weight: 600; }
   a { color: var(--accent-ink); }
@@ -996,19 +985,15 @@ const CSS = `
 
   /* the bar: the only row of buttons that is always on screen */
   .bar {
-    display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto auto auto; align-items: center;
-    gap: .5rem .625rem; padding: .625rem .25rem 0;
+    display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; align-items: center;
+    gap: .5rem .625rem; padding: 0 .25rem .375rem;
   }
   .brand { grid-column: 1; grid-row: 1; display: flex; align-items: center; gap: .625rem; min-width: 0; margin-right: .75rem; }
   .logo { width: 1.5rem; height: 1.5rem; flex: none; color: var(--accent); }
   .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   /* Which machine is this? Two dashboards from two hosts look identical otherwise. */
   .hostchip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .8125rem; color: var(--faint); }
-  .adv-btn { grid-column: 2; grid-row: 1; }
-  .adv-btn::after { content: ""; display: inline-block; width: .375rem; height: .375rem; margin: 0 0 .125rem .5rem; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); transition: transform .2s ease; }
-  .adv-btn[aria-expanded="true"]::after { margin-bottom: -.125rem; transform: rotate(-135deg); }
-  .tabs[hidden] { display: none; }
-  .tabs { grid-column: 3; grid-row: 1; display: flex; gap: .25rem; min-width: 0; padding: 2px; overflow-x: auto; scrollbar-width: none; }
+  .tabs { display: flex; gap: .25rem; min-width: 0; padding: 2px; overflow-x: auto; scrollbar-width: none; }
   .tab {
     flex: none; padding: .3125rem .875rem; background: transparent; color: var(--muted);
     border: 1px solid transparent; border-radius: var(--radius);
@@ -1018,38 +1003,27 @@ const CSS = `
   .tab[aria-pressed="true"] { background: var(--pane); border-color: var(--line); color: var(--ink); font-weight: 600; }
   /* on/off: the state and its button are items of the bar; the notice takes a line under it */
   #frag-toggle, .switch { display: contents; }
-  .switch-state, .theme-label { grid-row: 1; margin-right: -.125rem; font-size: .8125rem; white-space: nowrap; color: var(--muted); }
-  .switch-state { grid-column: 4; }
+  .switch-state { grid-row: 1; margin-right: .125rem; font-size: .8125rem; white-space: nowrap; color: var(--muted); }
+  .switch-state { grid-column: 3; }
   .switch-state.off { color: var(--red); font-weight: 600; }
-  .theme-label { grid-column: 6; margin-left: .375rem; }
-  /* the two switches: a track and a knob that slides across it, and stretches while pressed */
-  .switch-btn, .theme-btn {
-    grid-row: 1; position: relative; flex: none; width: 2.5rem; height: 1.5rem; padding: 0;
-    border: 0; border-radius: .4375rem; background: var(--switch-off); cursor: pointer;
-    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .04), inset 0 1px 2px rgba(0, 0, 0, .10);
-    transition: background-color .3s ease; -webkit-tap-highlight-color: transparent;
+  /* the switches: two labelled segments, the one in force filled (Off | On, Light | Dark) */
+  .seg-switch {
+    position: relative; display: inline-flex; flex: none; gap: 2px; padding: 3px;
+    background: var(--inset); border: 1px solid var(--line); border-radius: 9px;
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
   }
-  .switch-btn { grid-column: 5; }
-  .theme-btn { grid-column: 7; }
-  .switch-btn::after, .theme-btn .knob {
-    content: ""; position: absolute; top: .125rem; left: .125rem; width: 1.25rem; height: 1.25rem;
-    border-radius: .3125rem; background: #fff;
-    box-shadow: 0 0 0 .5px rgba(0, 0, 0, .05), 0 3px 8px rgba(0, 0, 0, .16), 0 2px 1px rgba(0, 0, 0, .07);
-    transition: left .3s cubic-bezier(.3, .8, .25, 1), width .3s cubic-bezier(.3, .8, .25, 1);
+  .seg-switch > span {
+    padding: .1875rem .6875rem; border-radius: 6px; font: 600 .75rem/1.4 var(--sans); color: var(--faint);
+    transition: background-color .18s ease, color .18s ease, box-shadow .18s ease;
   }
-  .switch-btn:active::after, .theme-btn:active .knob { width: 1.5rem; }
-  .switch-btn[aria-checked="true"]::after, .theme-btn[aria-checked="true"] .knob { left: 1.125rem; }
-  .switch-btn[aria-checked="true"]:active::after, .theme-btn[aria-checked="true"]:active .knob { left: .875rem; }
-  .switch-btn[aria-checked="true"] { background: var(--switch-on); }
-  /* day and night: the knob carries a sun, then a moon */
-  .theme-btn[aria-checked="true"] { background: var(--switch-night); }
-  .theme-btn .knob { display: grid; place-items: center; }
-  .theme-btn .knob svg { grid-area: 1 / 1; width: .75rem; height: .75rem; transition: opacity .3s ease, transform .3s ease; }
-  .theme-btn .sun { color: #e8a013; }
-  .theme-btn .moon { color: #3d5a9e; opacity: 0; transform: rotate(-60deg) scale(.6); }
-  .theme-btn[aria-checked="true"] .sun { opacity: 0; transform: rotate(60deg) scale(.6); }
-  .theme-btn[aria-checked="true"] .moon { opacity: 1; transform: none; }
-  .switch-btn:focus-visible, .theme-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .seg-switch[aria-checked="false"] .seg-off,
+  .mswitch[aria-checked="false"] .seg-off { background: var(--raise); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, .12); }
+  .seg-switch[aria-checked="true"] .seg-on,
+  .mswitch[aria-checked="true"] .seg-on { background: var(--switch-on); color: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .18); }
+  .seg-switch:hover { border-color: var(--line-strong); }
+  .switch-btn { grid-row: 1; grid-column: 4; }
+  .theme-btn { grid-row: 1; grid-column: 5; }
+  .seg-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   /* the note on which models are validated opens from the logo */
   .brand-tip { position: relative; flex: none; display: inline-flex; border-radius: .375rem; text-decoration: none; }
   .brand-tip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -1067,47 +1041,33 @@ const CSS = `
   }
   .mini-btn:hover, .chip:hover { background: var(--hover); border-color: var(--line-strong); }
 
-  /* the strip: the saving on the left, the numbers after it, the pipe under both */
-  .strip {
-    display: grid; grid-template-columns: minmax(30rem, 46%) minmax(0, 1fr); grid-template-areas: "head nums" "pipe pipe";
-    background: var(--pane); border: 1px solid var(--line-soft); border-radius: var(--radius-pane);
+  /* the top: three containers, one figure each */
+  .top { display: flex; flex-direction: column; gap: .875rem; }
+  .kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .875rem; }
+  .kpi {
+    display: flex; flex-direction: column; gap: .625rem; min-width: 0; padding: 1.5rem 1.75rem 1.625rem;
+    background: linear-gradient(160deg, var(--band) 0%, transparent 55%), var(--pane);
+    border: 1px solid var(--line-soft); border-radius: var(--radius-pane);
   }
-  #frag-session, .gauge { display: contents; }
-  .head {
-    grid-area: head; min-width: 0; padding: 1.5rem 1.75rem 1.75rem;
-    border-radius: calc(var(--radius-pane) - 1px) 0 0 0;
-    background: linear-gradient(to bottom, transparent 45%, var(--pane)), linear-gradient(to right, transparent 30%, var(--pane)), var(--band);
+  .kpi-neg { background: linear-gradient(160deg, var(--band-loss) 0%, transparent 55%), var(--pane); }
+  .kpi-none { background: var(--pane); }
+  .kpi-wide { grid-column: 1 / -1; }
+  .kpi-label { margin: 0; font-size: .8125rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+  .kpi-fig { display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem .875rem; margin: 0; }
+  .kpi-num {
+    font-size: clamp(2.75rem, 4.6vw, 4.5rem); font-weight: 700; line-height: 1; letter-spacing: -.035em; font-variation-settings: 'opsz' 32;
+    font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--accent-ink);
   }
-  .gauge-loss .head { background: linear-gradient(to bottom, transparent 45%, var(--pane)), linear-gradient(to right, transparent 30%, var(--pane)), var(--band-loss); }
-  .head-title { margin: 0; font-size: 1.125rem; font-weight: 600; line-height: 1.25; color: var(--muted); }
-  .head-figs { display: flex; flex-wrap: wrap; align-items: flex-end; gap: .75rem 2.5rem; }
-  .head-money { margin: 0; font-size: 1.125rem; font-weight: 600; line-height: 1.25; color: var(--muted); }
-  .head-money .gauge-num { color: var(--accent-ink); }
-  .head-money.neg .gauge-num, .head-money.neg { color: var(--red); }
-  .gauge-loss .head-title .gauge-num { color: var(--red); }
-  .gauge-num { display: block; margin-bottom: .375rem; font-size: clamp(3.5rem, 6vw, 5.5rem); font-weight: 700; line-height: 1; letter-spacing: -.04em; font-variant-numeric: tabular-nums; color: var(--ink); }
-  .gauge-empty .head-title { font-size: 1.5rem; color: var(--ink); }
-  .head-sub { margin: .375rem 0 0; font-size: .75rem; color: var(--muted); }
+  .kpi-says { font-size: 1.0625rem; font-weight: 600; color: var(--ink); }
+  .kpi-neg .kpi-num, .kpi-neg .kpi-says { color: var(--red); }
+  .kpi-none .kpi-num { color: var(--faint); }
+  .kpi-none .kpi-says { color: var(--muted); font-weight: 500; }
+  .kpi-sub { margin: 0; font-size: .8125rem; line-height: 1.45; color: var(--muted); }
+  .kpi-sub b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .kpis-empty .kpi-label { font-size: 1.25rem; letter-spacing: 0; text-transform: none; color: var(--ink); }
+  .kpis-empty .kpi-sub { max-width: 46rem; }
+  .card.pipe-card { padding: .875rem 1.25rem; }
 
-  /* the numbers: one column each, in order of weight */
-  #frag-header { grid-area: nums; min-width: 0; }
-  .numbers { height: 100%; }
-  .list-head { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-  /* no dividers: the space between columns separates them, and size and colour say which to read first */
-  .ledger { display: grid; grid-template-columns: 1.25fr 1.2fr .9fr .9fr; align-items: start; align-content: center; gap: 0 1.75rem; height: 100%; margin: 0; padding: 0 1.5rem 0 1.25rem; }
-  .ledger-row { position: relative; display: flex; flex-direction: column; gap: .3125rem; min-width: 0; padding: 1rem 0; }
-  .ledger dt { font-size: .8125rem; font-weight: 500; color: var(--muted); }
-  .ledger dd { margin: 0; }
-  .ledger-val { font: 600 clamp(1.25rem, 1.75vw, 1.625rem)/1.15 var(--mono); white-space: nowrap; letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--ink); }
-  .ledger-note { font-size: .8125rem; line-height: 1.4; color: var(--muted); }
-  .ledger-note b { font-weight: 600; color: var(--ink); }
-  .ledger-row.quiet dt { color: var(--faint); }
-  .ledger-row.quiet .ledger-val { display: flex; align-items: flex-end; height: calc(clamp(1.25rem, 1.75vw, 1.625rem) * 1.15); font-size: clamp(1rem, 1.25vw, 1.125rem); font-weight: 500; line-height: 1.25; color: var(--muted); }
-  .ledger-row.quiet .ledger-note { color: var(--faint); }
-  .ledger-row.quiet .ledger-note b { color: var(--muted); }
-  .ledger-val.pos { color: var(--accent-ink); }
-  .ledger-val.neg, .ledger-val.neg + .ledger-note, .ledger-val.neg + .ledger-note b { color: var(--red); }
-  .ledger-val.muted-val { font-family: var(--sans); font-size: 1rem; font-weight: 400; letter-spacing: 0; color: var(--faint); }
   /* a label that explains itself on hover or keyboard focus */
   .q { cursor: help; text-decoration: underline dotted var(--line-strong); text-underline-offset: 3px; }
   .q::after {
@@ -1120,33 +1080,25 @@ const CSS = `
   }
   .q:hover::after, .q:focus-visible::after { opacity: 1; visibility: visible; transform: translateY(0); }
 
-  /* the pipe: the whole on the left, then one tile for each part of it */
-  .record { grid-area: pipe; display: flex; align-items: center; gap: 1rem; min-width: 0; padding: .25rem .75rem .75rem 1.75rem; }
-  .rec-head { flex: none; display: flex; align-items: baseline; gap: .5rem; white-space: nowrap; }
-  .rec-name { font-size: .8125rem; font-weight: 600; color: var(--ink); }
-  .rec-num { font: 600 .8125rem var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); }
-  .gauge-track {
-    flex: 1 1 auto; display: flex; min-width: 0; height: 2.75rem; overflow: hidden; border-radius: var(--radius);
-    background: linear-gradient(to right, var(--pipe-quiet) calc(var(--cut, 200%) - 4.5rem), var(--pipe-saved) calc(var(--cut, 200%) + 4.5rem));
-  }
-  .gauge-loss .gauge-track { background: linear-gradient(to right, var(--pipe-quiet) calc(var(--cut, 200%) - 4.5rem), var(--pipe-over) calc(var(--cut, 200%) + 4.5rem)); }
-  .gauge-track:empty { background: none; }
-  .gauge-track:empty { border: 1px dashed var(--line-strong); border-radius: var(--radius); }
-  .gauge-seg {
-    display: flex; align-items: center; justify-content: space-between; gap: .75rem;
-    flex: 0 1 auto; min-width: .5rem; overflow: hidden; padding: 0 .875rem;
-    color: #fff; white-space: nowrap; container-type: inline-size;
-  }
-  .seg-name { font-size: .8125rem; font-weight: 600; }
-  .seg-num { font: 600 .9375rem var(--mono); font-variant-numeric: tabular-nums; }
-  /* a tile too narrow for its words keeps the amount, then only its colour */
-  @container (max-width: 7.5rem) { .seg-name { display: none; } }
-  @container (max-width: 3.5rem) { .seg-num { display: none; } }
+  /* the saving bar: the meter of the Operate quota card from the design library,
+     a label row, a rounded meter on a light track and a caption under it (4 px there, 12 px here) */
+  .card.pipe-card { padding: 1rem 1.25rem; }
+  .record { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "head caption" "track track"; align-items: baseline; gap: .625rem 1rem; min-width: 0; }
+  .rec-head { grid-area: head; display: flex; align-items: baseline; gap: .5rem; white-space: nowrap; }
+  .rec-name { font-size: .875rem; font-weight: 600; color: var(--ink); }
+  .rec-num { font: 500 .875rem var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); }
+  .rec-caption { grid-area: caption; display: flex; justify-content: flex-end; gap: 1.5rem; margin: 0; font: .8125rem/1.38 var(--mono); color: var(--muted); }
+  .rec-caption b { font-weight: 600; color: var(--ink); }
+  .rec-key b { color: var(--accent-ink); }
+  .gauge-loss .rec-key, .gauge-loss .rec-key b { color: var(--red); }
+  .gauge-track { grid-area: track; display: flex; gap: 3px; height: 12px; min-width: 0; overflow: hidden; border-radius: 9999px; background: var(--inset); }
+  .gauge-track:empty { border: 1px dashed var(--line-strong); }
+  .gauge-seg { display: block; height: 100%; min-width: 3px; border-radius: 9999px; }
+  .gauge-sent, .gauge-base { background: var(--line-strong); }
+  .gauge-saved { background: linear-gradient(to right, #3b7bea, var(--pipe-saved)); }
+  .gauge-over { background: var(--pipe-over); }
 
-  /* the view: records side by side, the one that matters most on the left */
-  .views { display: grid; min-width: 0; min-height: 0; }
-  .view { display: grid; grid-template-columns: minmax(0, 1fr); gap: .75rem; align-content: start; min-width: 0; min-height: 0; }
-  .view[hidden] { display: none; }
+  /* records */
   .card {
     display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 1rem 1.125rem;
     background: var(--pane); border: 1px solid var(--line-soft); border-radius: var(--radius-pane);
@@ -1155,50 +1107,42 @@ const CSS = `
   .card { container-type: inline-size; }
   .card > [id^="frag-"] { flex: 1 1 auto; min-height: 0; overflow: auto; scrollbar-width: thin; }
   .card.help { display: block; overflow: auto; scrollbar-width: thin; }
-  #frag-recent { max-height: 30rem; }
-  /* the second record of the page: as wide as the strip, roomy rows, larger type */
-  .card.recent { padding: 1.25rem 1.5rem 1rem; }
-  .card.recent .card-head { margin-bottom: 1rem; font-size: 1.125rem; letter-spacing: -.01em; }
+
+  /* recent requests, and beside them the images that went out */
+  .pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: .875rem; }
+  .pair > .card { padding: 1.25rem 1.5rem 1rem; }
+  .pair .card-head { margin-bottom: 1rem; font-size: 1.125rem; letter-spacing: -.01em; }
+  #frag-recent, #frag-latest { max-height: 34rem; }
   .card.recent .rtable { font-size: .875rem; }
   .card.recent .rtable th { padding: .5rem .75rem .625rem; font-size: .75rem; letter-spacing: .04em; text-transform: uppercase; }
   .card.recent .rtable td { padding: .625rem .75rem; }
   .card.recent .rtable th:first-child, .card.recent .rtable td:first-child { padding-left: 0; }
-  /* with Advanced open the page scrolls and each Advanced record gets a fixed height */
-  body.adv-open { height: auto; overflow: visible; }
-  body.adv-open #frag-recent { max-height: 30rem; }
-  body.adv-open .view { grid-template-rows: none; }
+  /* the endpoint is nearly always "messages": the narrow record leaves it out */
+  .card.recent .rtable th:nth-child(8), .card.recent .rtable td:nth-child(8) { display: none; }
+
+  /* Advanced: under the main screen, reached by scrolling */
+  .advanced { display: flex; flex-direction: column; gap: .875rem; margin-top: 1.25rem; padding-top: 1.5rem; border-top: 1px solid var(--line); }
+  .adv-head { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1.5rem; }
+  .adv-head h2 { margin: 0; font-size: 1.375rem; font-weight: 700; letter-spacing: -.01em; color: var(--ink); }
+  .view { display: grid; grid-template-columns: minmax(0, 1fr); gap: .875rem; align-content: start; min-width: 0; }
+  .view[hidden] { display: none; }
+  .view > .card > [id^="frag-"] { max-height: 38rem; }
   @media (min-width: 1100px) {
-    body.adv-open .view > .card { height: 32rem; }
-    body.adv-open #v-setup > .card:first-child { height: auto; }
-  }
-  @media (min-width: 1100px) {
-    #v-images { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); }
+    .pair { grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); align-items: stretch; }
     #v-sessions { grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); }
     #v-setup { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
     #v-setup > .card:first-child { grid-column: 1 / -1; }
   }
-  /* On a screen large enough the page never scrolls: each record scrolls on its own. */
-  @media (min-width: 1100px) and (min-height: 640px) {
-    body { height: 100vh; overflow: hidden; }
-    .view { grid-template-rows: minmax(0, 1fr); align-content: stretch; }
-    #v-setup { grid-template-rows: auto minmax(0, 1fr); }
-    #frag-recent { max-height: none; }
-  }
-  @media (max-width: 1099px) {
-    .ledger { grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr)); align-items: start; gap: 0 1.5rem; padding: .5rem 1.125rem; }
-    .ledger-row { padding: .625rem 0; }
+  @media (max-width: 960px) {
+    .kpis { grid-template-columns: minmax(0, 1fr); }
   }
   @media (max-width: 760px) {
-    .switch-state, .theme-label, .hostchip { display: none; }
+    .switch-state, .hostchip { display: none; }
     .brand-tip::after { position: fixed; left: .5rem; right: .5rem; top: 3rem; width: auto; }
-    .bar { grid-template-columns: max-content max-content max-content auto auto auto auto; padding-bottom: 2px; overflow-x: auto; scrollbar-width: none; }
-    .brand { margin-right: 0; }
-    .tabs { overflow: visible; }
     .banner { position: sticky; left: 0; max-width: calc(100vw - 2rem); }
-    .strip { grid-template-columns: minmax(0, 1fr); grid-template-areas: "head" "pipe" "nums"; }
-    .head { border-radius: calc(var(--radius-pane) - 1px) calc(var(--radius-pane) - 1px) 0 0; }
-    .record { flex-direction: column; align-items: stretch; gap: .375rem; padding: .625rem .75rem .75rem; }
+    .record { flex-direction: column; align-items: stretch; gap: .375rem; }
     .gauge-track { flex: none; }
+    .picker { flex-direction: column; align-items: stretch; gap: .5rem; }
   }
 
   /* formulas */
@@ -1346,20 +1290,16 @@ const CSS = `
   .pick-family { flex: none; margin-left: .75rem; font-size: .75rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--faint); }
   .pick-group:first-child .pick-family { margin-left: 0; }
   .mswitch {
-    flex: none; display: inline-flex; align-items: center; gap: .5rem; padding: .3125rem .375rem .3125rem .75rem;
-    background: var(--raise); color: var(--muted); border: 1px solid var(--line); border-radius: .5rem;
+    flex: none; display: inline-flex; align-items: center; gap: .625rem; padding: .25rem .25rem .25rem .75rem;
+    background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 10px;
     font: 500 .8125rem/1.4 var(--sans); white-space: nowrap; cursor: pointer; transition: background-color .2s ease, color .2s ease, border-color .2s ease;
   }
   .mswitch:hover { border-color: var(--line-strong); }
+  .mswitch .seg-switch { cursor: inherit; }
   .mswitch[aria-checked="true"] { color: var(--ink); }
   .mswitch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .mswitch-track { position: relative; width: 1.75rem; height: 1rem; border-radius: .3125rem; background: var(--switch-off); transition: background-color .22s ease; }
-  .mswitch-track::after {
-    content: ""; position: absolute; top: .125rem; left: .125rem; width: .75rem; height: .75rem; border-radius: .1875rem;
-    background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .25); transition: left .22s cubic-bezier(.3, .8, .25, 1);
-  }
-  .mswitch[aria-checked="true"] .mswitch-track { background: var(--switch-on); }
-  .mswitch[aria-checked="true"] .mswitch-track::after { left: .875rem; }
+  .seg-switch.mini { padding: 2px; border-radius: 7px; }
+  .seg-switch.mini > span { padding: .0625rem .5rem; border-radius: 5px; font-size: .6875rem; }
 
   /* setup: every model is a key in one row that scrolls sideways when it runs out of width */
   .chips {
@@ -1434,30 +1374,20 @@ const GLUE_JS = `
     setTimeout(ppProbe, 3000);
   });
   // One view at a time. The choice survives reloads (the offline probe reloads the page when the proxy returns).
-  var ppViewName = 'images';
-  var ppAdvOpen = false;
+  var ppViewName = 'breakdown';
   function ppView(name) {
+    if (!document.getElementById('v-' + name)) name = 'breakdown';
     ppViewName = name;
-    document.querySelectorAll('.view').forEach(function (v) { v.hidden = !ppAdvOpen || v.id !== 'v-' + name; });
+    document.querySelectorAll('.view').forEach(function (v) { v.hidden = v.id !== 'v-' + name; });
     document.querySelectorAll('.tab').forEach(function (b) {
       b.setAttribute('aria-pressed', b.dataset.view === name ? 'true' : 'false');
     });
     try { localStorage.setItem('pp-view', name); } catch (e) {}
   }
-  // Everything under the saving is Advanced: closed until asked for, and a closed view does not poll.
-  function ppAdvanced(open) {
-    ppAdvOpen = open === undefined ? !ppAdvOpen : open;
-    document.querySelector('.tabs').hidden = !ppAdvOpen;
-    document.body.classList.toggle('adv-open', ppAdvOpen);
-    document.getElementById('adv-btn').setAttribute('aria-expanded', ppAdvOpen ? 'true' : 'false');
-    try { localStorage.setItem('pp-adv', ppAdvOpen ? '1' : '0'); } catch (e) {}
-    ppView(ppViewName);
-  }
   (function () {
-    var saved = null, adv = null;
-    try { saved = localStorage.getItem('pp-view'); adv = localStorage.getItem('pp-adv'); } catch (e) {}
-    if (saved && document.getElementById('v-' + saved)) ppViewName = saved;
-    if (adv === '1') ppAdvanced(true);
+    var saved = null;
+    try { saved = localStorage.getItem('pp-view'); } catch (e) {}
+    if (saved) ppView(saved);
   })();
 `;
 
@@ -1514,48 +1444,47 @@ export function renderPage(port: number, hostLabel = ''): string {
     <h1 class="sr-only">fastpipe</h1>
     ${host ? `<span class="hostchip" title="proxy host">${host}</span>` : ''}
   </div>
-  <button class="mini-btn adv-btn" type="button" id="adv-btn" aria-expanded="false" aria-controls="advanced" onclick="ppAdvanced()">Advanced</button>
-  <nav class="tabs" aria-label="Views" hidden>
-    <button class="tab" type="button" data-view="images" aria-pressed="true" onclick="ppView('images')">Images</button>
-    <button class="tab" type="button" data-view="sessions" aria-pressed="false" onclick="ppView('sessions')">Sessions</button>
-    <button class="tab" type="button" data-view="setup" aria-pressed="false" onclick="ppView('setup')">Setup</button>
-    <button class="tab" type="button" data-view="math" aria-pressed="false" onclick="ppView('math')">Math</button>
-  </nav>
   <div id="frag-toggle" hx-get="/fragments/toggle" hx-trigger="load, every 2s" hx-swap="innerHTML"></div>
-  <span class="theme-label">Dark</span>
-  <button type="button" id="theme-btn" class="theme-btn" role="switch" aria-checked="false" aria-label="Dark theme" title="Dark theme" onclick="ppTheme()"><span class="knob" aria-hidden="true"><svg class="sun" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="8" r="2.9" fill="currentColor" stroke="none"/><path d="M8 1.2v1.6M8 13.2v1.6M1.2 8h1.6M13.2 8h1.6M3.2 3.2l1.1 1.1M11.7 11.7l1.1 1.1M3.2 12.8l1.1-1.1M11.7 4.3l1.1-1.1"/></svg><svg class="moon" viewBox="0 0 16 16" fill="currentColor"><path d="M13.6 10.1A6 6 0 0 1 5.9 2.4a.5.5 0 0 0-.66-.6 6.6 6.6 0 1 0 8.96 8.96.5.5 0 0 0-.6-.66Z"/></svg></span></button>
+  <button type="button" id="theme-btn" class="theme-btn seg-switch" role="switch" aria-checked="false" aria-label="Dark theme" title="Dark theme" onclick="ppTheme()"><span class="seg-off" aria-hidden="true">Light</span><span class="seg-on" aria-hidden="true">Dark</span></button>
 </header>
 
-<div class="strip">
-  <div id="frag-session" hx-get="/fragments/session-summary" hx-trigger="load, every 2s" hx-swap="innerHTML">
-    <div class="gauge gauge-empty"><header class="head"><h2 class="head-title">Connecting…</h2></header><div class="record"><div class="gauge-track"></div></div></div>
-  </div>
-  <div id="frag-header" hx-get="/fragments/header" hx-select=".numbers" hx-trigger="load, every 2s" hx-swap="innerHTML"></div>
-</div><!-- /strip -->
+<div id="frag-session" class="top" hx-get="/fragments/session-summary" hx-trigger="load, every 2s" hx-swap="innerHTML">
+  <div class="kpis kpis-empty"><section class="kpi kpi-wide"><h2 class="kpi-label">Connecting…</h2></section></div>
+</div>
 
 <section class="card pick-card" aria-label="Models to compress">
   <div id="frag-picker" hx-get="/fragments/models?part=picker" hx-trigger="load, every 5s" hx-swap="innerHTML"></div>
 </section>
 
-<section class="card recent" aria-labelledby="recent-head">
-  <h2 class="card-head" id="recent-head">Recent requests</h2>
-  <div id="frag-recent" hx-get="/fragments/recent" hx-trigger="load, every 2s" hx-swap="innerHTML"></div>
-</section>
+<div class="pair">
+  <section class="card recent" aria-labelledby="recent-head">
+    <h2 class="card-head" id="recent-head">Recent requests</h2>
+    <div id="frag-recent" hx-get="/fragments/recent" hx-trigger="load, every 2s" hx-swap="innerHTML"></div>
+  </section>
+  <section class="card shot" aria-labelledby="shot-head">
+    <h2 class="card-head" id="shot-head">Images sent</h2>
+    <div id="frag-latest" hx-get="/fragments/latest" hx-trigger="load, every 2s, pp-refresh" hx-swap="innerHTML"
+         hx-vals='js:{pin: window.pp.pin == null ? "" : window.pp.pin, source: window.pp.src ? "1" : ""}'></div>
+  </section>
+</div>
 
-<!-- Advanced: closed until its button is pressed. One view at a time, picked in the bar; a view that is not showing loads once and then stops polling. -->
-<main class="views" id="advanced">
-<section class="view" id="v-images" hidden>
+<!-- Advanced: under the main screen, one view at a time; a view that is not showing loads once and then stops polling. -->
+<section class="advanced" id="advanced" aria-labelledby="adv-head">
+<div class="adv-head">
+  <h2 id="adv-head">Advanced</h2>
+  <nav class="tabs" aria-label="Advanced views">
+    <button class="tab" type="button" data-view="breakdown" aria-pressed="true" onclick="ppView('breakdown')">Breakdown</button>
+    <button class="tab" type="button" data-view="sessions" aria-pressed="false" onclick="ppView('sessions')">Sessions</button>
+    <button class="tab" type="button" data-view="setup" aria-pressed="false" onclick="ppView('setup')">Setup</button>
+    <button class="tab" type="button" data-view="math" aria-pressed="false" onclick="ppView('math')">Math</button>
+  </nav>
+</div>
+<section class="view" id="v-breakdown">
   <div class="card">
     <h3 class="card-head">Image vs text breakdown</h3>
     <div id="frag-context-map" hx-get="/fragments/context-map" hx-trigger="load" hx-swap="innerHTML"></div>
   </div>
-  <div class="card">
-    <h3 class="card-head">Image and source</h3>
-    <div id="frag-latest" hx-get="/fragments/latest" hx-trigger="load, every 2s [!document.getElementById('v-images').hidden], pp-refresh" hx-swap="innerHTML"
-         hx-vals='js:{pin: window.pp.pin == null ? "" : window.pp.pin, source: window.pp.src ? "1" : ""}'></div>
-  </div>
-</section><!-- /v-images -->
-
+</section><!-- /v-breakdown -->
 <section class="view" id="v-sessions" hidden>
   <div class="card">
     <h3 class="card-head">Top sessions</h3>
@@ -1613,7 +1542,7 @@ npx pxpipe-proxy</pre>
     <div id="frag-math" hx-get="/fragments/header" hx-select=".math" hx-trigger="load, every 2s [!document.getElementById('v-math').hidden]" hx-swap="innerHTML"></div>
   </div>
 </section><!-- /v-math -->
-</main>
+</section><!-- /advanced -->
 
 <div class="tray" x-data="{ toasts: [], next: 1 }"
      @pp-toast.window="if (toasts.some(t => t.text === $event.detail.text)) return; const id = next++; toasts.push({ id, text: $event.detail.text }); setTimeout(() => toasts = toasts.filter(t => t.id !== id), 5000)">

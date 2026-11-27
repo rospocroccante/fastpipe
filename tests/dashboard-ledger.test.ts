@@ -30,76 +30,37 @@ function rows(html: string): string[][] {
   return [...html.matchAll(row)].map((m) => [text(m[1]!), text(m[2]!), text(m[3]!)]);
 }
 
-describe('dashboard numbers', () => {
-  it('lists each number as a row with its value and a note', () => {
-    expect(rows(renderHeaderFragment(stats(), 47821))).toEqual([
-      ['Input tokens saved', '345,678', 'vs the same context as text'],
-      ['Cost per request', '$0.2000', '−60% vs $0.5000 as text'], // 0.20 + 30 / 100
-      ['Requests', '120', '100 sent as images'],
-      ['Running for', '1h 2m 3s', 'on port 47821'],
-    ]);
-  });
-
-  it('prints the savings large and the two context numbers quiet', () => {
+describe('the Math view', () => {
+  it('is the only thing the header fragment renders: the numbers live in the containers at the top', () => {
     const html = renderHeaderFragment(stats(), 47821);
-    const quiet = [...html.matchAll(/<div class="ledger-row quiet"><dt>(.*?)<\/dt>/g)].map((m) => m[1]);
-    expect(quiet).toEqual(['Requests', 'Running for']);
+    expect(html.startsWith('<section class="math">')).toBe(true);
+    expect(html).not.toContain('ledger');
+    expect(html).toContain('class="math-grid"');
   });
 
-  it('marks in bold the figure to read first in a note', () => {
-    const html = renderHeaderFragment(stats(), 47821);
-    expect(html).toContain('<dd class="ledger-note"><b>−60%</b> vs $0.5000 as text</dd>');
-    expect(html).toContain('<dd class="ledger-note"><b>100</b> sent as images</dd>');
+  it('compares the cost per imaged request with the same requests as text', () => {
+    // 0.20 + 30 / 100 = 0.50 per request as text
+    expect(renderHeaderFragment(stats(), 47821)).toContain('$0.5000/req');
   });
 
-  it('leaves the dollars to the headline, so they are not printed twice', () => {
-    expect(renderHeaderFragment(stats({ saved_usd: 1844.62 }), 47821)).not.toContain('Estimated saved');
-  });
-
-  it('heads the list with what the numbers cover', () => {
-    const html = renderHeaderFragment(stats(), 47821);
-    expect(html.startsWith('<div class="numbers"><h2 class="list-head">Since start</h2><dl class="ledger">')).toBe(true);
-  });
-
-  it('explains a row on hover or keyboard focus, from the label and not from an icon', () => {
-    const html = renderHeaderFragment(stats(), 47821);
-    expect(html).toMatch(/<span class="q" tabindex="0"[^>]*data-tip="[^"]+"[^>]*>Cost per request<\/span>/);
-    expect(html).not.toContain('>?</span>');
-  });
-
-  it('marks the cost per request only when images cost more than the text would have', () => {
-    expect(renderHeaderFragment(stats(), 47821)).not.toContain('ledger-val neg');
-    // 0.20 per imaged request against 0.20 - 10 / 100 = 0.10 as text
-    expect(renderHeaderFragment(stats({ saved_usd: -10 }), 47821)).toContain(
-      '<dd class="ledger-val neg">$0.2000</dd>',
-    );
-  });
-
-  it('keeps the formulas in a block of their own, after the numbers', () => {
-    // The page picks one block or the other out of this fragment, so they must not nest.
-    const html = renderHeaderFragment(stats(), 47821);
-    const numbers = html.indexOf('<div class="numbers">');
-    const math = html.indexOf('<section class="math">');
-    expect(numbers).toBe(0);
-    expect(math).toBeGreaterThan(html.indexOf('</dl></div>'));
-    expect(html.slice(math)).toContain('class="math-grid"');
-    expect(html).not.toContain('<details');
+  it('names the uptime and the port, which no longer have a row of their own', () => {
+    expect(renderHeaderFragment(stats(), 47821)).toContain('Running for 1h 2m 3s on port 47821.');
   });
 });
 
 describe('compression switch', () => {
   it('explains the kill switch on the button instead of beside it', () => {
     const html = renderToggleFragment(true);
-    expect(html).toMatch(/<button class="switch-btn"[^>]*title="Kill switch\./);
+    expect(html).toMatch(/<button class="switch-btn seg-switch"[^>]*title="Kill switch\./);
     expect(html).not.toContain('class="hint"');
   });
 
   it('is a switch whose position says whether compression is on', () => {
     expect(renderToggleFragment(true)).toMatch(
-      /<button class="switch-btn"[^>]*role="switch" aria-checked="true"[^>]*aria-label="Disable compression"/,
+      /<button class="switch-btn seg-switch"[^>]*role="switch" aria-checked="true"[^>]*aria-label="Disable compression"/,
     );
     expect(renderToggleFragment(false)).toMatch(
-      /<button class="switch-btn"[^>]*role="switch" aria-checked="false"[^>]*aria-label="Enable compression"/,
+      /<button class="switch-btn seg-switch"[^>]*role="switch" aria-checked="false"[^>]*aria-label="Enable compression"/,
     );
   });
 });
